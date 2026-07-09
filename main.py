@@ -346,8 +346,7 @@ async def create_dia(interaction: discord.Interaction):
         res = await ask("その他設定", f"種別「**{t_name}**」の始発駅（3つまで）：", is_required=True)
         if res is None: return
         collected["start_stations"].append(f"{t_name}＝{res}")
-
-    # 7. ダイヤグラム選択
+# 7. ダイヤグラム選択
     confirm_msg = await user.send("### ■ タイトル：その他設定\nダイヤグラムを出力しますか？\n✅（はい）か❌（いいえ）のリアクションで答えてください。")
     await confirm_msg.add_reaction("✅")
     await confirm_msg.add_reaction("❌")
