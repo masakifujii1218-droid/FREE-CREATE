@@ -24,9 +24,11 @@ intents.guilds = True
 
 class DiaBot(commands.Bot):
     def __init__(self):
+        # 標準の機能だけを呼び出すようにシンプルにします
         super().__init__(command_prefix="!", intents=intents)
-        self.tree = app_commands.CommandTree(self)
+        
     async def setup_hook(self):
+        # 最初から入っている tree を使って同期させます
         await self.tree.sync()
 
 bot = DiaBot()
