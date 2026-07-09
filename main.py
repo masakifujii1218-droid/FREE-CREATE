@@ -346,16 +346,20 @@ async def create_dia(interaction: discord.Interaction):
         res = await ask("その他設定", f"種別「**{t_name}**」の始発駅（3つまで）：", is_required=True)
         if res is None: return
         collected["start_stations"].append(f"{t_name}＝{res}")
-# 7. ダイヤグラム選択
-    confirm_msg = await user.send("### ■ タイトル：その他設定\nダイヤグラムを出力しますか？\n✅（はい）か❌（いいえ）のリアクションで答えてください。")
-    await confirm_msg.add_reaction("✅")
-    await confirm_msg.add_reaction("❌")
+# 7. ダイヤグラム選択（チャット入力式）
+    collected["want_diagram"] = True  # デフォルト値
+    while True:
+        res = await ask("その他設定", "ダイヤグラムを出力しますか？（はい / いいえ でお答えください）", is_required=True)
+        if res is None: return # タイムアウト時は処理を抜ける
 
-    try:
-        rx, rx_u = await bot.wait_for('reaction_add', check=lambda r, u: u == user and str(r.emoji) in ["✅", "❌"] and r.message.id == confirm_msg.id, timeout=300.0)
-        collected["want_diagram"] = (str(rx.emoji) == "✅")
-    except asyncio.TimeoutError:
-        collected["want_diagram"] = False
+        if res in ["はい", "はい ", "ハイ"]:
+            collected["want_diagram"] = True
+            break
+        elif res in ["いいえ", "いいえ ", "イイエ"]:
+            collected["want_diagram"] = False
+            break
+        else:
+            await user.send("❌ **入力エラー:** 「はい」または「いいえ」の文字だけで入力してください。")
 
     # --- 計算と送信処理 ---
     await user.send("🔄 ダイヤを作成しています…")
