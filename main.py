@@ -1,7 +1,11 @@
 import sys
+import site
 import os
-# 【超重要】Renderのライブラリ認識バグを強引に解決するパス追加コード
-sys.path.append(os.path.expanduser("~/.local/lib/python3.11/site-packages"))
+
+# Renderが実際にインストールしたライブラリの隠し場所を自動取得して最優先で追加
+user_site = site.getusersitepackages()
+if user_site not in sys.path:
+    sys.path.insert(0, user_site)
 
 import discord
 from discord import app_commands
