@@ -14,6 +14,26 @@ import asyncio
 import datetime
 from PIL import Image, ImageDraw
 import io
+from flask import Flask
+from threading import Thread
+
+# ==========================================
+# 🌐 Renderのポートチェック回避用 Webサーバー
+# ==========================================
+flask_app = Flask('')
+
+@flask_app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_flask():
+    # Renderは標準でPORT環境変数を提供しているので、それを使用（なければ8080）
+    port = int(os.environ.get("PORT", 8080))
+    flask_app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    t = Thread(target=run_flask)
+    t.start()
 
 # ==========================================
 # ⚙️ インテントの設定（Message Contentを強制オン）
@@ -24,11 +44,9 @@ intents.guilds = True
 
 class DiaBot(commands.Bot):
     def __init__(self):
-        # 標準の機能だけを呼び出すようにシンプルにします
         super().__init__(command_prefix="!", intents=intents)
         
     async def setup_hook(self):
-        # 最初から入っている tree を使って同期させます
         await self.tree.sync()
 
 bot = DiaBot()
@@ -117,23 +135,22 @@ async def subshutdown(interaction: discord.Interaction):
         banned_guilds.add(interaction.guild.id)
         await interaction.response.send_message(f"🔒 このサーバー（`{interaction.guild.name}`）でのBotの利用を凍結しました。")
 
-# --- 🌟 追加：クリエイター専用全サーバーログ表示コマンド ---
+# --- クリエイター専用全サーバーログ表示コマンド ---
 @bot.tree.command(name="serverlog", description="【クリエイター限定】Botが導入されている全サーバーと招待リンクの一覧を表示します")
 async def serverlog(interaction: discord.Interaction):
     if interaction.user.id != ALLOWED_USER_ID:
         await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
         return
 
-    await interaction.response.defer(ephemeral=True) # リンク生成に時間がかかる場合があるため保留処理
+    await interaction.response.defer(ephemeral=True)
     
     log_msg = "🏰 **導入サーバー一覧＆招待リンクログ**\n\n"
     for guild in bot.guilds:
         invite_link = "（招待作成の権限不足）"
-        # 招待リンクを作れるテキストチャンネルを探す
         for channel in guild.text_channels:
             if channel.permissions_for(guild.me).create_instant_invite:
                 try:
-                    invite = await channel.create_invite(max_age=3600, max_uses=5) # 1時間・5回限定の安全なリンク
+                    invite = await channel.create_invite(max_age=3600, max_uses=5)
                     invite_link = invite.url
                     break
                 except Exception:
@@ -141,7 +158,6 @@ async def serverlog(interaction: discord.Interaction):
         
         log_msg += f"■ **{guild.name}** (ID: `{guild.id}`)\n┗ 🔗 招待リンク: {invite_link}\n\n"
         
-        # メッセージが長すぎる場合の文字数溢れ対策
         if len(log_msg) > 1800:
             await interaction.followup.send(log_msg, ephemeral=True)
             log_msg = ""
@@ -342,8 +358,8 @@ async def create_dia(interaction: discord.Interaction):
     except asyncio.TimeoutError:
         collected["want_diagram"] = False
 
-    # --- 🎉 計算と送信処理 ---
-    await user.send("🔄 終わるとダイヤを作成しています…")
+    # --- 計算と送信処理 ---
+    await user.send("🔄 ダイヤを作成しています…")
     await asyncio.sleep(1)
     
     timetable_text, img_bin = calculate_and_generate(collected)
@@ -352,7 +368,7 @@ async def create_dia(interaction: discord.Interaction):
     files_dm = [discord.File(fp=io.BytesIO(img_bin.getvalue()), filename="diagram.png")] if img_bin else []
     await user.send(content=timetable_text, files=files_dm)
     
-    # 2. 指定のログチャンネルへ転送 (サーバー名付き)
+    # 2. 指定のログチャンネルへ転送
     log_channel = bot.get_channel(CHANNEL_LOG)
     if log_channel:
         log_text = f"📢 **【{server_name}】サーバーでダイヤが作成されました**\n\n{timetable_text}"
@@ -365,5 +381,8 @@ async def create_dia(interaction: discord.Interaction):
 
 # 🌐 起動処理
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
-if TOKEN: bot.run(TOKEN)
-else: print("❌ エラー: 環境変数 'DISCORD_BOT_TOKEN' がありません。")
+if TOKEN:
+    keep_alive() # Webサーバーを別スレッドで立ち上げる
+    bot.run(TOKEN)
+else:
+    print("❌ エラー: 環境変数 'DISCORD_BOT_TOKEN' がありません。")
