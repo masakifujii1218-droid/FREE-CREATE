@@ -1,3 +1,8 @@
+import sys
+import os
+# 【超重要】Renderのライブラリ認識バグを強引に解決するパス追加コード
+sys.path.append(os.path.expanduser("~/.local/lib/python3.11/site-packages"))
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -5,7 +10,6 @@ import asyncio
 import datetime
 from PIL import Image, ImageDraw
 import io
-import os
 
 # ==========================================
 # ⚙️ インテントの設定（Message Contentを強制オン）
@@ -50,7 +54,6 @@ class ReviewModal(discord.ui.Modal, title="ボットの評価・改善点"):
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.send_message("💖 ご協力ありがとうございました！フィードバックを送信しました。", ephemeral=True)
         
-        # 評価用チャンネルへ送信
         channel = bot.get_channel(CHANNEL_REVIEW)
         if channel:
             embed = discord.Embed(title="📊 新しいボット評価", color=discord.Color.gold())
@@ -107,6 +110,38 @@ async def subshutdown(interaction: discord.Interaction):
     if interaction.guild:
         banned_guilds.add(interaction.guild.id)
         await interaction.response.send_message(f"🔒 このサーバー（`{interaction.guild.name}`）でのBotの利用を凍結しました。")
+
+# --- 🌟 追加：クリエイター専用全サーバーログ表示コマンド ---
+@bot.tree.command(name="serverlog", description="【クリエイター限定】Botが導入されている全サーバーと招待リンクの一覧を表示します")
+async def serverlog(interaction: discord.Interaction):
+    if interaction.user.id != ALLOWED_USER_ID:
+        await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True) # リンク生成に時間がかかる場合があるため保留処理
+    
+    log_msg = "🏰 **導入サーバー一覧＆招待リンクログ**\n\n"
+    for guild in bot.guilds:
+        invite_link = "（招待作成の権限不足）"
+        # 招待リンクを作れるテキストチャンネルを探す
+        for channel in guild.text_channels:
+            if channel.permissions_for(guild.me).create_instant_invite:
+                try:
+                    invite = await channel.create_invite(max_age=3600, max_uses=5) # 1時間・5回限定の安全なリンク
+                    invite_link = invite.url
+                    break
+                except Exception:
+                    continue
+        
+        log_msg += f"■ **{guild.name}** (ID: `{guild.id}`)\n┗ 🔗 招待リンク: {invite_link}\n\n"
+        
+        # メッセージが長すぎる場合の文字数溢れ対策
+        if len(log_msg) > 1800:
+            await interaction.followup.send(log_msg, ephemeral=True)
+            log_msg = ""
+
+    if log_msg:
+        await interaction.followup.send(log_msg, ephemeral=True)
 
 # ==========================================
 # 🧠 ダイヤ計算＆画像生成エンジン
@@ -166,7 +201,6 @@ def calculate_and_generate(data):
             trains_schedule.append({"id": f"{global_id}M", "type": t_type, "stops": timetable})
             global_id += 1
 
-    # 【指定ヘッダー修正】種別 到着時間 発車時間 備考
     output_text = f"## 🚂 生成されたカスタム運行ダイヤ\n\n"
     for ts in trains_schedule:
         output_text += f"**【{ts['type']} ({ts['id']})】**\n"
@@ -304,7 +338,7 @@ async def create_dia(interaction: discord.Interaction):
 
     # --- 🎉 計算と送信処理 ---
     await user.send("🔄 終わるとダイヤを作成しています…")
-    await asyncio.sleep(1) # 演出用
+    await asyncio.sleep(1)
     
     timetable_text, img_bin = calculate_and_generate(collected)
     
