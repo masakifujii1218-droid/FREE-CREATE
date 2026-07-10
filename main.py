@@ -222,7 +222,35 @@ async def unblacklist(interaction: discord.Interaction, server_id: str):
             await interaction.response.send_message(f"ℹ️ サーバーID `{g_id}` は登録されていません。", ephemeral=True)
     except ValueError:
         await interaction.response.send_message("❌ サーバーIDは数字で入力してください。", ephemeral=True)
+     # 📋 ブラックリストサーバー一覧表示コマンド（開発者限定）
+    @bot.tree.command(name="blacklists", description="【開発者限定】ブラックリストに登録されているサーバーの一覧を表示します")
+    async def blacklists(interaction: discord.Interaction):
+    if interaction.user.id != ALLOWED_USER_ID:
+        await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
+        return
 
+    # ブラックリストが空っぽの場合
+    if not banned_guilds:
+        await interaction.response.send_message("ℹ️ 現在ブラックリストに登録されているサーバーはありません。", ephemeral=True)
+        return
+
+    await interaction.response.defer(ephemeral=True)
+    
+    msg = "🚫 **ブラックリスト登録サーバー一覧**\n\n"
+    for g_id in banned_guilds:
+        # Botがまだそのサーバーのキャッシュを持っているか確認（名前の取得を試みる）
+        guild = bot.get_guild(g_id)
+        guild_name = f"**{guild.name}**" if guild else "*(Bot退出済み/不明のサーバー)*"
+        
+        msg += f"・ ID: `{g_id}` ➔ {guild_name}\n"
+        
+        # Discordの2000文字制限対策
+        if len(msg) > 1800:
+            await interaction.followup.send(msg, ephemeral=True)
+            msg = ""
+
+    if msg:
+        await interaction.followup.send(msg, ephemeral=True)
 # 🚫 【新規】ユーザーブラックリスト登録コマンド（開発者限定）
 @bot.tree.command(name="user-blacklist", description="【開発者限定】指定したユーザーをブラックリストに登録して一切の操作を拒否します")
 @app_commands.describe(user_id="ブラックリストに登録するユーザーのID")
@@ -414,7 +442,7 @@ async def create_dia(interaction: discord.Interaction):
     user, server_name = interaction.user, interaction.guild.name if interaction.guild else "DM"
     try:
         welcome_embed = discord.Embed(
-            title="🚂 鉄道ダイヤ作成ウィザードへようこそ！",
+            title="🚂 ダイヤ作成機能をご利用いただき、ありがとうございます！",
             description="これからの質問にそのままDMで回答してください。\n※制限時間は各質問**5分**です。",
             color=discord.Color.blue()
         )
@@ -689,7 +717,7 @@ async def create_dia(interaction: discord.Interaction):
                 await user.send("❌ **入力エラー:** 「はい」または「いいえ」の文字だけで入力してください。")
 
     if current_state != 9:
-        cancel_embed = discord.Embed(title="🔒 キャンセル完了", description="ダイヤ作成ウィザードを中断しました。またいつでも `/create` を実行してください！", color=discord.Color.red())
+        cancel_embed = discord.Embed(title="🔒 キャンセル完了", description="ダイヤ作成を中断しました。またいつでも `/create` を実行してください！", color=discord.Color.red())
         await user.send(embed=cancel_embed)
         return
 
