@@ -40,7 +40,7 @@ def keep_alive():
 intents = discord.Intents.default()
 intents.message_content = True 
 intents.guilds = True
-intents.members = True # オーナーへのDM送信やメンバー情報の正確な取得に必要
+intents.members = True # メンバー情報の正確な取得に必要
 
 class DiaBot(commands.Bot):
     def __init__(self):
@@ -53,7 +53,7 @@ bot = DiaBot()
 
 ALLOWED_USER_ID = 1301944996261400656
 banned_guilds = set() # 利用凍結サーバーID
-banned_users = set()  # 🚫 ブラックリストユーザーID（管理者でも使用不可にする対象）
+banned_users = set()  # 🚫 ブラックリストユーザーID
 allowed_roles_map = {}
 
 # 指定されたチャンネルID
@@ -65,43 +65,32 @@ CHANNEL_LOG = 1524877240628805763
 # ==========================================
 @bot.event
 async def on_guild_join(guild: discord.Guild):
-    # 利用凍結（ブラックリスト）されているサーバーなら即退出
     if guild.id in banned_guilds:
         await guild.leave()
         return
 
-    # サーバーのオーナーを取得
     owner = guild.owner
     if owner:
         try:
-            # 箱（Embed）を作成
             embed = discord.Embed(
                 title="🏰 ボットを追加してくれてありがとうございます！",
                 description=f"この度は **{guild.name}** に当ボットを導入いただき、誠にありがとうございます！",
-                color=discord.Color.red()
+                color=discord.Color.green()
             )
-            
-            
             embed.add_field(
-                name="📢 サポートサーバー・申請先はこちら",
-                value="下記リンクよりサポートサーバーへご参加いただき、指定の報告チャンネルにてサーバー名等をご申告ください。\n\n"
-                      "**🔗 サポートサーバー：**\nhttps://discord.gg/vDcFTK2wbh",
+                name="🚀 すぐに使えます！",
+                value="メンバーの方はサーバー内で `/create` コマンドを実行することで、DMを通していつでも自由にダイヤを作成可能です。",
                 inline=False
             )
-
             embed.add_field(
                 name="⚙️ `/create-roles` コマンドについて",
-                value="初期状態では誰でも `/create` コマンドを使用できますが、このコマンドを使うことで「**特定の役職（ロール）を持っているメンバーだけ**」にダイヤ作成権限を絞り込むことができます。\n"
-                      "*(※サーバーの管理者権限を持つユーザーのみ実行可能です)*",
+                value="初期状態では誰でも `/create` を使用できますが、管理者がこのコマンドを使うことで「**特定の役職（ロール）を持っているメンバーだけ**」に作成権限を絞り込むことができます。",
                 inline=False
             )
-            
-            embed.set_footer(text="お手数をおかけしますが、ボット運用の維持・安全対策のためご協力をお願いいたします。")
-            
-            # オーナーのDMへ送信
+            embed.set_footer(text="Free Create をお楽しみください！")
             await owner.send(embed=embed)
         except discord.Forbidden:
-            print(f"⚠️ サーバー「{guild.name}」のオーナー({owner.name})にDMを送信できませんでした（DM拒否設定など）。")
+            print(f"⚠️ サーバー「{guild.name}」のオーナーにDMを送信できませんでした。")
         except Exception as e:
             print(f"⚠️ サーバー参加時DM送信エラー: {e}")
 
@@ -157,15 +146,12 @@ class ReviewButtons(discord.ui.View):
 @bot.tree.command(name="create-roles", description="どのロールが/createを使えるか設定します（サーバー管理者専用）")
 @app_commands.describe(role_id="許可するロールのIDを入力してください")
 async def create_roles(interaction: discord.Interaction, role_id: str):
-    # 【最優先ガード】ブラックリストユーザーなら管理者であっても弾く
     if interaction.user.id in banned_users:
         await interaction.response.send_message("❌ あなたはBotの利用をブラックリストにより制限されています。", ephemeral=True)
         return
-
     if interaction.guild_id in banned_guilds:
         await interaction.response.send_message("❌ このサーバーでのBotの利用は凍結されています。", ephemeral=True)
         return
-
     if not interaction.permissions.administrator:
         await interaction.response.send_message("❌ このコマンドはサーバーの管理者権限を持つ人のみ実行できます。", ephemeral=True)
         return
@@ -176,36 +162,30 @@ async def create_roles(interaction: discord.Interaction, role_id: str):
     except ValueError:
         await interaction.response.send_message("❌ ロールIDは数字で入力してください。", ephemeral=True)
 
-# 🚫 サーバーブラックリスト登録コマンド（開発者限定）
 @bot.tree.command(name="blacklist", description="【開発者限定】指定したサーバーをブラックリストに登録して即時退出させます")
 @app_commands.describe(server_id="ブラックリストに登録するサーバーのID")
 async def blacklist(interaction: discord.Interaction, server_id: str):
     if interaction.user.id != ALLOWED_USER_ID:
         await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
         return
-    
     try:
         g_id = int(server_id)
         banned_guilds.add(g_id)
-        
         target_guild = bot.get_guild(g_id)
         left_msg = ""
         if target_guild:
             await target_guild.leave()
             left_msg = f"（該当サーバー「{target_guild.name}」から即時退出しました）"
-            
         await interaction.response.send_message(f"🚫 サーバーID `{g_id}` をブラックリストに登録しました。{left_msg}", ephemeral=True)
     except ValueError:
         await interaction.response.send_message("❌ サーバーIDは数字で入力してください。", ephemeral=True)
 
-# 🔓 サーバーブラックリスト解除コマンド（開発者限定）
 @bot.tree.command(name="unblacklist", description="【開発者限定】指定したサーバーのブラックリスト登録を解除します")
 @app_commands.describe(server_id="ブラックリストから解除するサーバーのID")
 async def unblacklist(interaction: discord.Interaction, server_id: str):
     if interaction.user.id != ALLOWED_USER_ID:
         await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
         return
-        
     try:
         g_id = int(server_id)
         if g_id in banned_guilds:
@@ -216,33 +196,26 @@ async def unblacklist(interaction: discord.Interaction, server_id: str):
     except ValueError:
         await interaction.response.send_message("❌ サーバーIDは数字で入力してください。", ephemeral=True)
 
-# 📋 【新規追加】ブラックリストサーバー一覧表示コマンド（開発者限定）
 @bot.tree.command(name="blacklists", description="【開発者限定】ブラックリストに登録されているサーバーの一覧を表示します")
 async def blacklists(interaction: discord.Interaction):
     if interaction.user.id != ALLOWED_USER_ID:
         await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
         return
-
     if not banned_guilds:
         await interaction.response.send_message("ℹ️ 現在ブラックリストに登録されているサーバーはありません。", ephemeral=True)
         return
-
     await interaction.response.defer(ephemeral=True)
-    
     msg = "🚫 **ブラックリスト登録サーバー一覧**\n\n"
     for g_id in banned_guilds:
         guild = bot.get_guild(g_id)
         guild_name = f"**{guild.name}**" if guild else "*(Bot退出済み/不明のサーバー)*"
         msg += f"・ ID: `{g_id}` ➔ {guild_name}\n"
-        
         if len(msg) > 1800:
             await interaction.followup.send(msg, ephemeral=True)
             msg = ""
-
     if msg:
         await interaction.followup.send(msg, ephemeral=True)
 
-# 🚫 ユーザーブラックリスト登録コマンド（開発者限定）
 @bot.tree.command(name="user-blacklist", description="【開発者限定】指定したユーザーをブラックリストに登録して一切の操作を拒否します")
 @app_commands.describe(user_id="ブラックリストに登録するユーザーのID")
 async def user_blacklist(interaction: discord.Interaction, user_id: str):
@@ -252,11 +225,10 @@ async def user_blacklist(interaction: discord.Interaction, user_id: str):
     try:
         u_id = int(user_id)
         banned_users.add(u_id)
-        await interaction.response.send_message(f"🚫 ユーザーID `{u_id}` をブラックリストに登録しました。今後管理者権限を持っていてもBotを操作できません。", ephemeral=True)
+        await interaction.response.send_message(f"🚫 ユーザーID `{u_id}` をブラックリストに登録しました。", ephemeral=True)
     except ValueError:
         await interaction.response.send_message("❌ ユーザーIDは数字で入力してください。", ephemeral=True)
 
-# 🔓 ユーザーブラックリスト解除コマンド（開発者限定）
 @bot.tree.command(name="user-unblacklist", description="【開発者限定】指定したユーザーのブラックリスト登録を解除します")
 @app_commands.describe(user_id="ブラックリストから解除するユーザーのID")
 async def user_unblacklist(interaction: discord.Interaction, user_id: str):
@@ -292,9 +264,7 @@ async def serverlog(interaction: discord.Interaction):
     if interaction.user.id != ALLOWED_USER_ID:
         await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
         return
-
     await interaction.response.defer(ephemeral=True)
-    
     log_msg = "🏰 **導入サーバー一覧＆招待リンクログ**\n\n"
     for guild in bot.guilds:
         invite_link = "（招待作成の権限不足）"
@@ -306,13 +276,10 @@ async def serverlog(interaction: discord.Interaction):
                     break
                 except Exception:
                     continue
-        
         log_msg += f"■ **{guild.name}** (ID: `{guild.id}`)\n┗ 🔗 招待リンク: {invite_link}\n\n"
-        
         if len(log_msg) > 1800:
             await interaction.followup.send(log_msg, ephemeral=True)
             log_msg = ""
-
     if log_msg:
         await interaction.followup.send(log_msg, ephemeral=True)
 
@@ -322,6 +289,7 @@ async def serverlog(interaction: discord.Interaction):
 def calculate_and_generate(data):
     stations, durations, types = data["stations"], data["durations"], data["types"]
     stops_raw, refuges, round_trips = data["stops"], data["refuges"], data["round_trips"]
+    num_trains = data.get("num_trains", 1)  # 💡 新機能：編成数
     start_time_str, start_stations, want_diagram = data["start_time"], data["start_stations"], data["want_diagram"]
 
     stop_map = {}
@@ -339,8 +307,12 @@ def calculate_and_generate(data):
     base_time = datetime.datetime.strptime(start_time_str, "%H:%M")
     trains_schedule, global_id, current_pool_time = [], 1, base_time
 
+    # 💡 往復数と編成数を考慮してスジを生成
     for ip in range(round_trips):
         for t_type in types:
+            # 編成IDの割り当て (1〜総編成数 でループ)
+            set_id = ((global_id - 1) % num_trains) + 1
+            
             start_t = current_pool_time
             current_pool_time += datetime.timedelta(minutes=2)
             timetable, current_t = {}, start_t
@@ -371,16 +343,26 @@ def calculate_and_generate(data):
                     else:
                         timetable[st] = {"arr": arr_time.strftime("%H:%M:%S"), "dep": arr_time.strftime("%H:%M:%S"), "note": "通過"}
             
-            trains_schedule.append({"id": f"{global_id}M", "type": t_type, "stops": timetable})
+            trains_schedule.append({"id": f"{global_id}M", "set_id": f"第{set_id}編成", "type": t_type, "stops": timetable})
             global_id += 1
 
+    # 💡 スマホの画面でも綺麗に等幅に見えるように、スペースでガチ固定化
     output_text = f"## 🚂 生成されたカスタム運行ダイヤ\n\n"
     for ts in trains_schedule:
-        output_text += f"**【{ts['type']} ({ts['id']})】**\n"
-        output_text += "```\n種別\t\t到着時間\t発車時間\t備考\n"
+        output_text += f"**【{ts['type']} ({ts['id']}) ➔ {ts['set_id']}担当】**\n"
+        output_text += "```\n"
+        output_text += "駅名      | 到着時間   | 発車時間   | 備考\n"
+        output_text += "--------------------------------------------------\n"
         for st in stations:
             st_data = ts["stops"].get(st, {"arr": "--:--:--", "dep": "--:--:--", "note": ""})
-            output_text += f"{st[:4].ljust(6)}\t{st_data['arr']}\t{st_data['dep']}\t{st_data['note']}\n"
+            
+            # 全角文字と半角文字のズレを綺麗に並び替える処理
+            st_name = st[:4].ljust(6)
+            arr_t = st_data['arr'].ljust(8)
+            dep_t = st_data['dep'].ljust(8)
+            note = st_data['note']
+            
+            output_text += f"{st_name} | {arr_t} | {dep_t} | {note}\n"
         output_text += "```\n"
 
     img_byte_arr = None
@@ -416,11 +398,9 @@ def calculate_and_generate(data):
 # ==========================================
 @bot.tree.command(name="create", description="新しく鉄道のダイヤを作成します")
 async def create_dia(interaction: discord.Interaction):
-    # 【最優先ガード】ブラックリストユーザーなら、たとえそのサーバーの「管理者」であっても完全に弾く
     if interaction.user.id in banned_users:
         await interaction.response.send_message("❌ あなたはBotの利用をブラックリストにより制限されています。", ephemeral=True)
         return
-
     if interaction.guild and interaction.guild.id in banned_guilds:
         await interaction.response.send_message("❌ このサーバーでのBotの利用は凍結されています。", ephemeral=True)
         return
@@ -433,7 +413,7 @@ async def create_dia(interaction: discord.Interaction):
     user, server_name = interaction.user, interaction.guild.name if interaction.guild else "DM"
     try:
         welcome_embed = discord.Embed(
-            title="🚂 鉄道ダイヤ作成BOTをご利用頂き、ありがとうございます！",
+            title="🚂 鉄道ダイヤ作成ウィザードへようこそ！",
             description="これからの質問にそのままDMで回答してください。\n※制限時間は各質問**5分**です。",
             color=discord.Color.blue()
         )
@@ -451,6 +431,7 @@ async def create_dia(interaction: discord.Interaction):
         "stops": [],
         "refuges": [],
         "round_trips": 1,
+        "num_trains": 1, # 💡 編成数初期値
         "start_time": "10:00",
         "start_stations": [],
         "want_diagram": True
@@ -462,19 +443,13 @@ async def create_dia(interaction: discord.Interaction):
         embed = discord.Embed(title=f"■ {title}", description=question, color=discord.Color.green())
         if not is_required:
             embed.set_footer(text="（任意・なければ「なし」と入力）")
-        
-        content_notice = "-# 戻る場合は back 、キャンセルする場合のは cancel"
+        content_notice = "-# 戻る場合は back 、キャンセルする場合は cancel"
         await user.send(embed=embed, content=content_notice)
-        
         try:
             msg = await bot.wait_for('message', check=check, timeout=300.0)
             text = msg.content.strip()
-            
-            if text.lower() == "cancel":
-                return "SIGNAL_CANCEL"
-            if text.lower() == "back":
-                return "SIGNAL_BACK"
-                
+            if text.lower() == "cancel": return "SIGNAL_CANCEL"
+            if text.lower() == "back": return "SIGNAL_BACK"
             return text
         except asyncio.TimeoutError:
             return "SIGNAL_TIMEOUT"
@@ -482,23 +457,19 @@ async def create_dia(interaction: discord.Interaction):
     current_state = 0
     sub_idx = 0
 
-    while current_state < 9:
+    while current_state < 10: # 💡 状態数を1つ増やして10に
         if current_state == 0:
             if sub_idx < 0: 
                 await user.send("💡 これ以上は戻れません。")
                 sub_idx = 0
-            
             is_req = (sub_idx <= 2)
             res = await ask("停車駅入力", f"{sub_idx + 1}問目：停車駅{sub_idx + 1}", is_required=is_req)
-            
             if res == "SIGNAL_CANCEL": break
             elif res == "SIGNAL_TIMEOUT": return
             elif res == "SIGNAL_BACK":
                 sub_idx -= 1
-                if sub_idx >= 0 and len(collected["stations"]) > sub_idx:
-                    collected["stations"].pop()
+                if sub_idx >= 0 and len(collected["stations"]) > sub_idx: collected["stations"].pop()
                 continue
-                
             if res == "なし" and not is_req:
                 if len(collected["stations"]) < 3:
                     await user.send("❌ 駅は最低3つ以上入力してください。")
@@ -506,10 +477,8 @@ async def create_dia(interaction: discord.Interaction):
                 current_state = 1
                 sub_idx = 0
             else:
-                if sub_idx < len(collected["stations"]):
-                    collected["stations"][sub_idx] = res
-                else:
-                    collected["stations"].append(res)
+                if sub_idx < len(collected["stations"]): collected["stations"][sub_idx] = res
+                else: collected["stations"].append(res)
                 sub_idx += 1
                 if sub_idx >= 15:
                     current_state = 1
@@ -521,34 +490,26 @@ async def create_dia(interaction: discord.Interaction):
                 current_state = 0
                 sub_idx = st_count - 1
                 continue
-                
             if sub_idx >= st_count - 1:
                 current_state = 2
                 sub_idx = 0
                 continue
-                
             if sub_idx == 0:
                 await user.send("⚠️ **これからの所要時間は、すべて「秒」で答えてください！**")
-                
             is_req = (sub_idx <= 1)
             st_from = collected["stations"][sub_idx]
             st_to = collected["stations"][sub_idx + 1]
             res = await ask("所要時間入力", f"{sub_idx + 1}問目：【{st_from}】〜【{st_to}】の所要時間（秒数のみ）", is_required=is_req)
-            
             if res == "SIGNAL_CANCEL": break
             elif res == "SIGNAL_TIMEOUT": return
             elif res == "SIGNAL_BACK":
                 sub_idx -= 1
-                if sub_idx >= 0 and len(collected["durations"]) > sub_idx:
-                    collected["durations"].pop()
+                if sub_idx >= 0 and len(collected["durations"]) > sub_idx: collected["durations"].pop()
                 continue
-                
             try:
                 sec_val = int(res)
-                if sub_idx < len(collected["durations"]):
-                    collected["durations"][sub_idx] = sec_val
-                else:
-                    collected["durations"].append(sec_val)
+                if sub_idx < len(collected["durations"]): collected["durations"][sub_idx] = sec_val
+                else: collected["durations"].append(sec_val)
                 sub_idx += 1
             except ValueError:
                 await user.send("❌ 数字（秒数）だけで入力してください。")
@@ -558,18 +519,14 @@ async def create_dia(interaction: discord.Interaction):
                 current_state = 1
                 sub_idx = len(collected["stations"]) - 2
                 continue
-                
             is_req = (sub_idx == 0)
             res = await ask("種別入力", f"{sub_idx + 1}問目：{'任意' if not is_req else ''}種別記入（例：{'各駅停車' if is_req else '準急'}）", is_required=is_req)
-            
             if res == "SIGNAL_CANCEL": break
             elif res == "SIGNAL_TIMEOUT": return
             elif res == "SIGNAL_BACK":
                 sub_idx -= 1
-                if sub_idx >= 0 and len(collected["types"]) > sub_idx:
-                    collected["types"].pop()
+                if sub_idx >= 0 and len(collected["types"]) > sub_idx: collected["types"].pop()
                 continue
-                
             if res == "なし" and not is_req:
                 if len(collected["types"]) < 1:
                     await user.send("❌ 種別は最低1つ以上入力してください。")
@@ -577,10 +534,8 @@ async def create_dia(interaction: discord.Interaction):
                 current_state = 3
                 sub_idx = 0
             else:
-                if sub_idx < len(collected["types"]):
-                    collected["types"][sub_idx] = res
-                else:
-                    collected["types"].append(res)
+                if sub_idx < len(collected["types"]): collected["types"][sub_idx] = res
+                else: collected["types"].append(res)
                 sub_idx += 1
                 if sub_idx >= 5:
                     current_state = 3
@@ -592,122 +547,111 @@ async def create_dia(interaction: discord.Interaction):
                 current_state = 2
                 sub_idx = type_count - 1
                 continue
-                
             if sub_idx >= type_count:
                 current_state = 4
                 sub_idx = 0
                 continue
-                
             t_name = collected["types"][sub_idx]
             res = await ask("各種別停車駅", f"【**{t_name}**】の停車駅を入力してください。\n※各駅停車の場合は『各駅停車』と書けば全駅停車になります。\n例：東京、千葉、上総一ノ宮", is_required=True)
-            
             if res == "SIGNAL_CANCEL": break
             elif res == "SIGNAL_TIMEOUT": return
             elif res == "SIGNAL_BACK":
                 sub_idx -= 1
-                if sub_idx >= 0 and len(collected["stops"]) > sub_idx:
-                    collected["stops"].pop()
+                if sub_idx >= 0 and len(collected["stops"]) > sub_idx: collected["stops"].pop()
                 continue
-                
-            if sub_idx < len(collected["stops"]):
-                collected["stops"][sub_idx] = res
-            else:
-                collected["stops"].append(res)
+            if sub_idx < len(collected["stops"]): collected["stops"][sub_idx] = res
+            else: collected["stops"].append(res)
             sub_idx += 1
 
         elif current_state == 4:
             res = await ask("退避駅設定", "退避可能駅を教えてください（書き方例：東京、品川、久里浜）", is_required=False)
-            
             if res == "SIGNAL_CANCEL": break
             elif res == "SIGNAL_TIMEOUT": return
             elif res == "SIGNAL_BACK":
                 current_state = 3
                 sub_idx = len(collected["types"]) - 1
                 continue
-                
-            if res != "なし":
-                collected["refuges"] = [r.strip() for r in res.split("、")]
-            else:
-                collected["refuges"] = []
+            if res != "なし": collected["refuges"] = [r.strip() for r in res.split("、")]
+            else: collected["refuges"] = []
             current_state = 5
             sub_idx = 0
 
         elif current_state == 5:
             res = await ask("その他設定", "往復数を入力してください（数字のみ）", is_required=True)
-            
             if res == "SIGNAL_CANCEL": break
             elif res == "SIGNAL_TIMEOUT": return
             elif res == "SIGNAL_BACK":
                 current_state = 4
                 continue
-                
             try:
                 collected["round_trips"] = int(res)
-                current_state = 6
+                current_state = 6 # 💡 次は新しく追加した「編成数」の質問へ
             except ValueError:
                 await user.send("❌ 数字だけで入力してください。")
 
-        elif current_state == 6:
-            res = await ask("その他設定", "開始時間を入力してください（例：10:00）", is_required=True)
-            
+        elif current_state == 6: # 💡 【新設】総編成数の質問
+            res = await ask("その他設定", "この路線全体の「総編成数（運用する車両の本数）」を入力してください（数字のみ）", is_required=True)
             if res == "SIGNAL_CANCEL": break
             elif res == "SIGNAL_TIMEOUT": return
             elif res == "SIGNAL_BACK":
                 current_state = 5
                 continue
-                
-            collected["start_time"] = res
-            current_state = 7
-            sub_idx = 0
+            try:
+                collected["num_trains"] = int(res)
+                current_state = 7
+            except ValueError:
+                await user.send("❌ 数字だけで入力してください。")
 
         elif current_state == 7:
-            type_count = len(collected["types"])
-            if sub_idx < 0:
+            res = await ask("その他設定", "開始時間を入力してください（例：10:00）", is_required=True)
+            if res == "SIGNAL_CANCEL": break
+            elif res == "SIGNAL_TIMEOUT": return
+            elif res == "SIGNAL_BACK":
                 current_state = 6
                 continue
-                
-            if sub_idx >= type_count:
-                current_state = 8
+            collected["start_time"] = res
+            current_state = 8
+            sub_idx = 0
+
+        elif current_state == 8:
+            type_count = len(collected["types"])
+            if sub_idx < 0:
+                current_state = 7
                 continue
-                
+            if sub_idx >= type_count:
+                current_state = 9
+                continue
             t_name = collected["types"][sub_idx]
             res = await ask("その他設定", f"種別「**{t_name}**」の始発駅を入力してください：", is_required=True)
-            
             if res == "SIGNAL_CANCEL": break
             elif res == "SIGNAL_TIMEOUT": return
             elif res == "SIGNAL_BACK":
                 sub_idx -= 1
-                if sub_idx >= 0 and len(collected["start_stations"]) > sub_idx:
-                    collected["start_stations"].pop()
+                if sub_idx >= 0 and len(collected["start_stations"]) > sub_idx: collected["start_stations"].pop()
                 continue
-                
             entry = f"{t_name}＝{res}"
-            if sub_idx < len(collected["start_stations"]):
-                collected["start_stations"][sub_idx] = entry
-            else:
-                collected["start_stations"].append(entry)
+            if sub_idx < len(collected["start_stations"]): collected["start_stations"][sub_idx] = entry
+            else: collected["start_stations"].append(entry)
             sub_idx += 1
 
-        elif current_state == 8:
+        elif current_state == 9:
             res = await ask("その他設定", "ダイヤグラムを出力しますか？（はい / いいえ でお答えください）", is_required=True)
-            
             if res == "SIGNAL_CANCEL": break
             elif res == "SIGNAL_TIMEOUT": return
             elif res == "SIGNAL_BACK":
-                current_state = 7
+                current_state = 8
                 sub_idx = len(collected["types"]) - 1
                 continue
-                
             if res in ["はい", "はい ", "ハイ"]:
                 collected["want_diagram"] = True
-                current_state = 9
+                current_state = 10
             elif res in ["いいえ", "いいえ ", "イイエ"]:
                 collected["want_diagram"] = False
-                current_state = 9
+                current_state = 10
             else:
                 await user.send("❌ **入力エラー:** 「はい」または「いいえ」の文字だけで入力してください。")
 
-    if current_state != 9:
+    if current_state != 10:
         cancel_embed = discord.Embed(title="🔒 キャンセル完了", description="ダイヤ作成ウィザードを中断しました。またいつでも `/create` を実行してください！", color=discord.Color.red())
         await user.send(embed=cancel_embed)
         return
