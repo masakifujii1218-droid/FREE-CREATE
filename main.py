@@ -52,7 +52,8 @@ class DiaBot(commands.Bot):
 bot = DiaBot()
 
 ALLOWED_USER_ID = 1301944996261400656
-banned_guilds = set() # ブラックリストのサーバーIDがここに格納されます
+banned_guilds = set() # 利用凍結サーバーID
+banned_users = set()  # 🚫 ブラックリストユーザーID（管理者でも使用不可にする対象）
 allowed_roles_map = {}
 
 # 指定されたチャンネルID
@@ -90,7 +91,7 @@ async def on_guild_join(guild: discord.Guild):
             
             embed.add_field(
                 name="📢 サポートサーバー・申請先はこちら",
-                value="下記リンクよりサポートサーバーへご参加いただき、指定 of 報告チャンネルにてサーバー名等をご申告ください。\n\n"
+                value="下記リンクよりサポートサーバーへご参加いただき、指定の報告チャンネルにてサーバー名等をご申告ください。\n\n"
                       "**🔗 サポートサーバー：**\nhttps://discord.gg/vDcFTK2wbh",
                 inline=False
             )
@@ -163,6 +164,15 @@ class ReviewButtons(discord.ui.View):
 @bot.tree.command(name="create-roles", description="どのロールが/createを使えるか設定します（サーバー管理者専用）")
 @app_commands.describe(role_id="許可するロールのIDを入力してください")
 async def create_roles(interaction: discord.Interaction, role_id: str):
+    # 【最優先ガード】ブラックリストユーザーなら管理者であっても弾く
+    if interaction.user.id in banned_users:
+        await interaction.response.send_message("❌ あなたはBotの利用をブラックリストにより制限されています。", ephemeral=True)
+        return
+
+    if interaction.guild_id in banned_guilds:
+        await interaction.response.send_message("❌ このサーバーでのBotの利用は凍結されています。", ephemeral=True)
+        return
+
     if not interaction.permissions.administrator:
         await interaction.response.send_message("❌ このコマンドはサーバーの管理者権限を持つ人のみ実行できます。", ephemeral=True)
         return
@@ -173,7 +183,7 @@ async def create_roles(interaction: discord.Interaction, role_id: str):
     except ValueError:
         await interaction.response.send_message("❌ ロールIDは数字で入力してください。", ephemeral=True)
 
-# 🚫 新設：ブラックリスト登録コマンド（開発者限定）
+# 🚫 サーバーブラックリスト登録コマンド（開発者限定）
 @bot.tree.command(name="blacklist", description="【開発者限定】指定したサーバーをブラックリストに登録して即時退出させます")
 @app_commands.describe(server_id="ブラックリストに登録するサーバーのID")
 async def blacklist(interaction: discord.Interaction, server_id: str):
@@ -185,7 +195,6 @@ async def blacklist(interaction: discord.Interaction, server_id: str):
         g_id = int(server_id)
         banned_guilds.add(g_id)
         
-        # もしBotが現在そのサーバーに導入されているなら強制退出させる
         target_guild = bot.get_guild(g_id)
         left_msg = ""
         if target_guild:
@@ -194,9 +203,9 @@ async def blacklist(interaction: discord.Interaction, server_id: str):
             
         await interaction.response.send_message(f"🚫 サーバーID `{g_id}` をブラックリストに登録しました。{left_msg}", ephemeral=True)
     except ValueError:
-        await interaction.response.send_message("❌ サーバーIDは数字（18桁〜の文字列）で入力してください。", ephemeral=True)
+        await interaction.response.send_message("❌ サーバーIDは数字で入力してください。", ephemeral=True)
 
-# 🔓 新設：ブラックリスト解除コマンド（開発者限定）
+# 🔓 サーバーブラックリスト解除コマンド（開発者限定）
 @bot.tree.command(name="unblacklist", description="【開発者限定】指定したサーバーのブラックリスト登録を解除します")
 @app_commands.describe(server_id="ブラックリストから解除するサーバーのID")
 async def unblacklist(interaction: discord.Interaction, server_id: str):
@@ -208,11 +217,42 @@ async def unblacklist(interaction: discord.Interaction, server_id: str):
         g_id = int(server_id)
         if g_id in banned_guilds:
             banned_guilds.remove(g_id)
-            await interaction.response.send_message(f"🔓 サーバーID `{g_id}` のブラックリストを解除しました。再導入が可能です。", ephemeral=True)
+            await interaction.response.send_message(f"🔓 サーバーID `{g_id}` のブラックリストを解除しました。", ephemeral=True)
         else:
-            await interaction.response.send_message(f"ℹ️ サーバーID `{g_id}` はブラックリストに登録されていません。", ephemeral=True)
+            await interaction.response.send_message(f"ℹ️ サーバーID `{g_id}` は登録されていません。", ephemeral=True)
     except ValueError:
         await interaction.response.send_message("❌ サーバーIDは数字で入力してください。", ephemeral=True)
+
+# 🚫 【新規】ユーザーブラックリスト登録コマンド（開発者限定）
+@bot.tree.command(name="user-blacklist", description="【開発者限定】指定したユーザーをブラックリストに登録して一切の操作を拒否します")
+@app_commands.describe(user_id="ブラックリストに登録するユーザーのID")
+async def user_blacklist(interaction: discord.Interaction, user_id: str):
+    if interaction.user.id != ALLOWED_USER_ID:
+        await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
+        return
+    try:
+        u_id = int(user_id)
+        banned_users.add(u_id)
+        await interaction.response.send_message(f"🚫 ユーザーID `{u_id}` をブラックリストに登録しました。今後管理者権限を持っていてもBotを操作できません。", ephemeral=True)
+    except ValueError:
+        await interaction.response.send_message("❌ ユーザーIDは数字で入力してください。", ephemeral=True)
+
+# 🔓 【新規】ユーザーブラックリスト解除コマンド（開発者限定）
+@bot.tree.command(name="user-unblacklist", description="【開発者限定】指定したユーザーのブラックリスト登録を解除します")
+@app_commands.describe(user_id="ブラックリストから解除するユーザーのID")
+async def user_unblacklist(interaction: discord.Interaction, user_id: str):
+    if interaction.user.id != ALLOWED_USER_ID:
+        await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
+        return
+    try:
+        u_id = int(user_id)
+        if u_id in banned_users:
+            banned_users.remove(u_id)
+            await interaction.response.send_message(f"🔓 ユーザーID `{u_id}` のブラックリストを解除しました。", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"ℹ️ ユーザーID `{u_id}` は登録されていません。", ephemeral=True)
+    except ValueError:
+        await interaction.response.send_message("❌ ユーザーIDは数字で入力してください。", ephemeral=True)
 
 @bot.tree.command(name="shutdown", description="【管理者限定】このサーバーからBotを退出させます")
 async def shutdown(interaction: discord.Interaction):
@@ -357,6 +397,11 @@ def calculate_and_generate(data):
 # ==========================================
 @bot.tree.command(name="create", description="新しく鉄道のダイヤを作成します")
 async def create_dia(interaction: discord.Interaction):
+    # 【最優先ガード】ブラックリストユーザーなら、たとえそのサーバーの「管理者」であっても完全に弾く
+    if interaction.user.id in banned_users:
+        await interaction.response.send_message("❌ あなたはBotの利用をブラックリストにより制限されています。", ephemeral=True)
+        return
+
     if interaction.guild and interaction.guild.id in banned_guilds:
         await interaction.response.send_message("❌ このサーバーでのBotの利用は凍結されています。", ephemeral=True)
         return
