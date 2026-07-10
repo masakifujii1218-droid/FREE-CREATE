@@ -81,13 +81,6 @@ async def on_guild_join(guild: discord.Guild):
                 color=discord.Color.red()
             )
             
-            # 最重要：サポートサーバーでの申告必須アナウンス
-            embed.add_field(
-                name="⚠️ 【最重要】サポートサーバーでの追加報告（申告）のお願い",
-                value="当ボットの有効化手続きのため、**サポートサーバー内での『BOT追加報告（申告）』が必須**となっております。\n\n"
-                      "**※期日までに申告が行われない場合、こちらのサーバーでボットの機能が自動的にロック（利用凍結）され、一切使用できなくなります。** 必ずお早めにご報告をお願いいたします。",
-                inline=False
-            )
             
             embed.add_field(
                 name="📢 サポートサーバー・申請先はこちら",
@@ -440,7 +433,7 @@ async def create_dia(interaction: discord.Interaction):
     user, server_name = interaction.user, interaction.guild.name if interaction.guild else "DM"
     try:
         welcome_embed = discord.Embed(
-            title="🚂 鉄道ダイヤ作成ウィザードへようこそ！",
+            title="🚂 鉄道ダイヤ作成BOTをご利用頂き、ありがとうございます！",
             description="これからの質問にそのままDMで回答してください。\n※制限時間は各質問**5分**です。",
             color=discord.Color.blue()
         )
