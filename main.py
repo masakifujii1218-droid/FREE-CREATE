@@ -52,7 +52,7 @@ class DiaBot(commands.Bot):
 bot = DiaBot()
 
 ALLOWED_USER_ID = 1301944996261400656
-banned_guilds = set()
+banned_guilds = set() # ブラックリストのサーバーIDがここに格納されます
 allowed_roles_map = {}
 
 # 指定されたチャンネルID
@@ -64,7 +64,7 @@ CHANNEL_LOG = 1524877240628805763
 # ==========================================
 @bot.event
 async def on_guild_join(guild: discord.Guild):
-    # 利用凍結されているサーバーなら即退出
+    # 利用凍結（ブラックリスト）されているサーバーなら即退出
     if guild.id in banned_guilds:
         await guild.leave()
         return
@@ -73,31 +73,40 @@ async def on_guild_join(guild: discord.Guild):
     owner = guild.owner
     if owner:
         try:
-            # Modmail風のスタイリッシュな案内箱（Embed）を作成
+            # 箱（Embed）を作成
             embed = discord.Embed(
                 title="🏰 ボットを追加してくれてありがとうございます！",
-                description=f"この度は **{guild.name}** に当ボットを導入いただき、誠にありがとうございます！皆さまの快適な鉄道ダイヤ作成をサポートします。",
-                color=discord.Color.blue()
+                description=f"この度は **{guild.name}** に当ボットを導入いただき、誠にありがとうございます！",
+                color=discord.Color.red()
             )
             
+            # 最重要：サポートサーバーでの申告必須アナウンス
+            embed.add_field(
+                name="⚠️ 【最重要】サポートサーバーでの追加報告（申告）のお願い",
+                value="当ボットの有効化手続きのため、**サポートサーバー内での『BOT追加報告（申告）』が必須**となっております。\n\n"
+                      "**※期日までに申告が行われない場合、こちらのサーバーでボットの機能が自動的にロック（利用凍結）され、一切使用できなくなります。** 必ずお早めにご報告をお願いいたします。",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="📢 サポートサーバー・申請先はこちら",
+                value="下記リンクよりサポートサーバーへご参加いただき、指定 of 報告チャンネルにてサーバー名等をご申告ください。\n\n"
+                      "**🔗 サポートサーバー：**\nhttps://discord.gg/vDcFTK2wbh",
+                inline=False
+            )
+
             embed.add_field(
                 name="⚙️ `/create-roles` コマンドについて",
-                value="初期状態では誰でも `/create` コマンドを使用できますが、このコマンドを使うことで「**特定の役職（ロール）を持っているメンバーだけ**」にダイヤ作成権限を絞り込むことができます。\n*(※サーバーの管理者権限を持つユーザーのみ実行可能です)*",
+                value="初期状態では誰でも `/create` コマンドを使用できますが、このコマンドを使うことで「**特定の役職（ロール）を持っているメンバーだけ**」にダイヤ作成権限を絞り込むことができます。\n"
+                      "*(※サーバーの管理者権限を持つユーザーのみ実行可能です)*",
                 inline=False
             )
             
-            embed.add_field(
-                name="📢 サポートサーバーについてのご案内",
-                value="サポートサーバーでは、BOT追加の報告受付、不具合の修正連絡、機能リクエスト、ユーザー同士のダイヤ共有などを行っています。ぜひご参加ください！\n\n**🔗 サポートサーバーはこちら：**\nhttps://discord.gg/vDcFTK2wbh",
-                inline=False
-            )
-            
-            embed.set_footer(text="ご不明な点やエラーがございましたら、サポートサーバーまでお気軽にお寄せください。")
+            embed.set_footer(text="お手数をおかけしますが、ボット運用の維持・安全対策のためご協力をお願いいたします。")
             
             # オーナーのDMへ送信
             await owner.send(embed=embed)
         except discord.Forbidden:
-            # オーナーがDMを閉じていた場合はログに出力してスキップ
             print(f"⚠️ サーバー「{guild.name}」のオーナー({owner.name})にDMを送信できませんでした（DM拒否設定など）。")
         except Exception as e:
             print(f"⚠️ サーバー参加時DM送信エラー: {e}")
@@ -163,6 +172,47 @@ async def create_roles(interaction: discord.Interaction, role_id: str):
         await interaction.response.send_message(f"✅ 設定完了：ロールID `{r_id}` を持つメンバーのみ `/create` が使用可能です。")
     except ValueError:
         await interaction.response.send_message("❌ ロールIDは数字で入力してください。", ephemeral=True)
+
+# 🚫 新設：ブラックリスト登録コマンド（開発者限定）
+@bot.tree.command(name="blacklist", description="【開発者限定】指定したサーバーをブラックリストに登録して即時退出させます")
+@app_commands.describe(server_id="ブラックリストに登録するサーバーのID")
+async def blacklist(interaction: discord.Interaction, server_id: str):
+    if interaction.user.id != ALLOWED_USER_ID:
+        await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
+        return
+    
+    try:
+        g_id = int(server_id)
+        banned_guilds.add(g_id)
+        
+        # もしBotが現在そのサーバーに導入されているなら強制退出させる
+        target_guild = bot.get_guild(g_id)
+        left_msg = ""
+        if target_guild:
+            await target_guild.leave()
+            left_msg = f"（該当サーバー「{target_guild.name}」から即時退出しました）"
+            
+        await interaction.response.send_message(f"🚫 サーバーID `{g_id}` をブラックリストに登録しました。{left_msg}", ephemeral=True)
+    except ValueError:
+        await interaction.response.send_message("❌ サーバーIDは数字（18桁〜の文字列）で入力してください。", ephemeral=True)
+
+# 🔓 新設：ブラックリスト解除コマンド（開発者限定）
+@bot.tree.command(name="unblacklist", description="【開発者限定】指定したサーバーのブラックリスト登録を解除します")
+@app_commands.describe(server_id="ブラックリストから解除するサーバーのID")
+async def unblacklist(interaction: discord.Interaction, server_id: str):
+    if interaction.user.id != ALLOWED_USER_ID:
+        await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
+        return
+        
+    try:
+        g_id = int(server_id)
+        if g_id in banned_guilds:
+            banned_guilds.remove(g_id)
+            await interaction.response.send_message(f"🔓 サーバーID `{g_id}` のブラックリストを解除しました。再導入が可能です。", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"ℹ️ サーバーID `{g_id}` はブラックリストに登録されていません。", ephemeral=True)
+    except ValueError:
+        await interaction.response.send_message("❌ サーバーIDは数字で入力してください。", ephemeral=True)
 
 @bot.tree.command(name="shutdown", description="【管理者限定】このサーバーからBotを退出させます")
 async def shutdown(interaction: discord.Interaction):
