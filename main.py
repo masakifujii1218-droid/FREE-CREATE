@@ -27,7 +27,6 @@ def home():
     return "Bot is running!"
 
 def run_flask():
-    # Renderは標準でPORT環境変数を提供しているので、それを使用（なければ8080）
     port = int(os.environ.get("PORT", 8080))
     flask_app.run(host='0.0.0.0', port=port)
 
@@ -36,11 +35,12 @@ def keep_alive():
     t.start()
 
 # ==========================================
-# ⚙️ インテントの設定（Message Contentを強制オン）
+# ⚙️ インテントの設定（ユーザー・サーバー参加検知を有効化）
 # ==========================================
 intents = discord.Intents.default()
 intents.message_content = True 
 intents.guilds = True
+intents.members = True # オーナーへのDM送信やメンバー情報の正確な取得に必要
 
 class DiaBot(commands.Bot):
     def __init__(self):
@@ -58,6 +58,49 @@ allowed_roles_map = {}
 # 指定されたチャンネルID
 CHANNEL_REVIEW = 1510639675239432313
 CHANNEL_LOG = 1524877240628805763
+
+# ==========================================
+# 📥 サーバー追加（参加）時の自動DM送信イベント
+# ==========================================
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    # 利用凍結されているサーバーなら即退出
+    if guild.id in banned_guilds:
+        await guild.leave()
+        return
+
+    # サーバーのオーナーを取得
+    owner = guild.owner
+    if owner:
+        try:
+            # Modmail風のスタイリッシュな案内箱（Embed）を作成
+            embed = discord.Embed(
+                title="🏰 ボットを追加してくれてありがとうございます！",
+                description=f"この度は **{guild.name}** に当ボットを導入いただき、誠にありがとうございます！皆さまの快適な鉄道ダイヤ作成をサポートします。",
+                color=discord.Color.blue()
+            )
+            
+            embed.add_field(
+                name="⚙️ `/create-roles` コマンドについて",
+                value="初期状態では誰でも `/create` コマンドを使用できますが、このコマンドを使うことで「**特定の役職（ロール）を持っているメンバーだけ**」にダイヤ作成権限を絞り込むことができます。\n*(※サーバーの管理者権限を持つユーザーのみ実行可能です)*",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="📢 サポートサーバーについてのご案内",
+                value="サポートサーバーでは、BOT追加の報告受付、不具合の修正連絡、機能リクエスト、ユーザー同士のダイヤ共有などを行っています。ぜひご参加ください！\n\n**🔗 サポートサーバーはこちら：**\nhttps://discord.gg/vDcFTK2wbh",
+                inline=False
+            )
+            
+            embed.set_footer(text="ご不明な点やエラーがございましたら、サポートサーバーまでお気軽にお寄せください。")
+            
+            # オーナーのDMへ送信
+            await owner.send(embed=embed)
+        except discord.Forbidden:
+            # オーナーがDMを閉じていた場合はログに出力してスキップ
+            print(f"⚠️ サーバー「{guild.name}」のオーナー({owner.name})にDMを送信できませんでした（DM拒否設定など）。")
+        except Exception as e:
+            print(f"⚠️ サーバー参加時DM送信エラー: {e}")
 
 # ==========================================
 # 🔐 評価・改善点入力フォーム (Modal)
@@ -135,7 +178,6 @@ async def subshutdown(interaction: discord.Interaction):
         banned_guilds.add(interaction.guild.id)
         await interaction.response.send_message(f"🔒 このサーバー（`{interaction.guild.name}`）でのBotの利用を凍結しました。")
 
-# --- クリエイター専用全サーバーログ表示コマンド ---
 @bot.tree.command(name="serverlog", description="【クリエイター限定】Botが導入されている全サーバーと招待リンクの一覧を表示します")
 async def serverlog(interaction: discord.Interaction):
     if interaction.user.id != ALLOWED_USER_ID:
@@ -261,7 +303,7 @@ def calculate_and_generate(data):
     return output_text, img_byte_arr
 
 # ==========================================
-# 📱 DM 一問一答対話システム
+# 📱 DM 一問一答対話システム（FSM改良版）
 # ==========================================
 @bot.tree.command(name="create", description="新しく鉄道のダイヤを作成します")
 async def create_dia(interaction: discord.Interaction):
@@ -276,116 +318,307 @@ async def create_dia(interaction: discord.Interaction):
 
     user, server_name = interaction.user, interaction.guild.name if interaction.guild else "DM"
     try:
-        await user.send("🚂 **鉄道ダイヤ作成ウィザードへようこそ！**\nこれからの質問にそのままDMで回答してください。\n※制限時間は各**5分**です。")
+        welcome_embed = discord.Embed(
+            title="🚂 鉄道ダイヤ作成ウィザードへようこそ！",
+            description="これからの質問にそのままDMで回答してください。\n※制限時間は各質問**5分**です。",
+            color=discord.Color.blue()
+        )
+        welcome_embed.set_footer(text="いつでも「cancel」で中断、「back」で1つ前の質問に戻れます。")
+        await user.send(embed=welcome_embed)
         await interaction.response.send_message(f"📩 {user.mention} さん、DMを確認してください！", ephemeral=True)
     except discord.Forbidden:
         await interaction.response.send_message(f"❌ DMを送信できません。設定を確認してください。", ephemeral=True)
         return
 
-    collected = {"stations": [], "durations": [], "types": [], "stops": [], "refuges": [], "round_trips": 1, "start_time": "10:00", "start_stations": [], "want_diagram": True}
+    collected = {
+        "stations": [],
+        "durations": [],
+        "types": [],
+        "stops": [],
+        "refuges": [],
+        "round_trips": 1,
+        "start_time": "10:00",
+        "start_stations": [],
+        "want_diagram": True
+    }
 
     def check(m): return m.author == user and isinstance(m.channel, discord.DMChannel)
 
     async def ask(title, question, is_required=True):
-        await user.send(f"### ■ タイトル：{title}\n{question}{' (必須)' if is_required else ' (任意・なければ「なし」)'}")
+        embed = discord.Embed(title=f"■ {title}", description=question, color=discord.Color.green())
+        if not is_required:
+            embed.set_footer(text="（任意・なければ「なし」と入力）")
+        
+        content_notice = "-# 戻る場合は back 、キャンセルする場合のは cancel"
+        await user.send(embed=embed, content=content_notice)
+        
         try:
             msg = await bot.wait_for('message', check=check, timeout=300.0)
-            return msg.content.strip()
+            text = msg.content.strip()
+            
+            if text.lower() == "cancel":
+                return "SIGNAL_CANCEL"
+            if text.lower() == "back":
+                return "SIGNAL_BACK"
+                
+            return text
         except asyncio.TimeoutError:
-            await user.send("⏰ **タイムアウト:** 5分間回答がなかったためキャンセルされました。")
-            return None
+            return "SIGNAL_TIMEOUT"
 
-    # 1. 停車駅入力
-    s_stop = False
-    for i in range(1, 16):
-        if s_stop: continue
-        res = await ask("停車駅", f"{i}問目：停車駅{i}", is_required=(i<=3))
-        if res is None: return
-        if res == "なし" and i > 3: s_stop = True
-        else: collected["stations"].append(res)
+    current_state = 0
+    sub_idx = 0
 
-    # 2. 所要時間入力（秒数）
-    st_count = len(collected["stations"])
-    await user.send("⚠️ **これからの所要時間は、すべて「秒」で答えてください！**")
-    for i in range(1, 15):
-        if i >= st_count: continue
-        res = await ask("所要時間", f"{i}問目：{collected['stations'][i-1]}〜{collected['stations'][i]}（秒数のみ）", is_required=(i<=2))
-        if res is None: return
-        collected["durations"].append(int(res))
+    while current_state < 9:
+        if current_state == 0:
+            if sub_idx < 0: 
+                await user.send("💡 これ以上は戻れません。")
+                sub_idx = 0
+            
+            is_req = (sub_idx <= 2)
+            res = await ask("停車駅入力", f"{sub_idx + 1}問目：停車駅{sub_idx + 1}", is_required=is_req)
+            
+            if res == "SIGNAL_CANCEL": break
+            elif res == "SIGNAL_TIMEOUT": return
+            elif res == "SIGNAL_BACK":
+                sub_idx -= 1
+                if sub_idx >= 0 and len(collected["stations"]) > sub_idx:
+                    collected["stations"].pop()
+                continue
+                
+            if res == "なし" and not is_req:
+                if len(collected["stations"]) < 3:
+                    await user.send("❌ 駅は最低3つ以上入力してください。")
+                    continue
+                current_state = 1
+                sub_idx = 0
+            else:
+                if sub_idx < len(collected["stations"]):
+                    collected["stations"][sub_idx] = res
+                else:
+                    collected["stations"].append(res)
+                sub_idx += 1
+                if sub_idx >= 15:
+                    current_state = 1
+                    sub_idx = 0
 
-    # 3. 種別入力
-    t_stop = False
-    for i in range(1, 6):
-        if t_stop: continue
-        res = await ask("種別", f"{i}問目：{'任意' if i>1 else ''}種別記入（例：{'各駅停車' if i==1 else '準急'}）", is_required=(i==1))
-        if res is None: return
-        if res == "なし" and i > 1: t_stop = True
-        else: collected["types"].append(res)
+        elif current_state == 1:
+            st_count = len(collected["stations"])
+            if sub_idx < 0:
+                current_state = 0
+                sub_idx = st_count - 1
+                continue
+                
+            if sub_idx >= st_count - 1:
+                current_state = 2
+                sub_idx = 0
+                continue
+                
+            if sub_idx == 0:
+                await user.send("⚠️ **これからの所要時間は、すべて「秒」で答えてください！**")
+                
+            is_req = (sub_idx <= 1)
+            st_from = collected["stations"][sub_idx]
+            st_to = collected["stations"][sub_idx + 1]
+            res = await ask("所要時間入力", f"{sub_idx + 1}問目：【{st_from}】〜【{st_to}】の所要時間（秒数のみ）", is_required=is_req)
+            
+            if res == "SIGNAL_CANCEL": break
+            elif res == "SIGNAL_TIMEOUT": return
+            elif res == "SIGNAL_BACK":
+                sub_idx -= 1
+                if sub_idx >= 0 and len(collected["durations"]) > sub_idx:
+                    collected["durations"].pop()
+                continue
+                
+            try:
+                sec_val = int(res)
+                if sub_idx < len(collected["durations"]):
+                    collected["durations"][sub_idx] = sec_val
+                else:
+                    collected["durations"].append(sec_val)
+                sub_idx += 1
+            except ValueError:
+                await user.send("❌ 数字（秒数）だけで入力してください。")
 
-    # 4. 各種別停車駅
-    for i, t_name in enumerate(collected["types"]):
-        res = await ask("各種別停車駅", f"{i+1}問目：【**{t_name}**】の停車駅：\n※各駅停車の場合は『各駅停車』と書けば全駅停車になります。例：東京、千葉、上総一ノ宮", is_required=(i==0))
-        if res is None: return
-        collected["stops"].append(res)
+        elif current_state == 2:
+            if sub_idx < 0:
+                current_state = 1
+                sub_idx = len(collected["stations"]) - 2
+                continue
+                
+            is_req = (sub_idx == 0)
+            res = await ask("種別入力", f"{sub_idx + 1}問目：{'任意' if not is_req else ''}種別記入（例：{'各駅停車' if is_req else '準急'}）", is_required=is_req)
+            
+            if res == "SIGNAL_CANCEL": break
+            elif res == "SIGNAL_TIMEOUT": return
+            elif res == "SIGNAL_BACK":
+                sub_idx -= 1
+                if sub_idx >= 0 and len(collected["types"]) > sub_idx:
+                    collected["types"].pop()
+                continue
+                
+            if res == "なし" and not is_req:
+                if len(collected["types"]) < 1:
+                    await user.send("❌ 種別は最低1つ以上入力してください。")
+                    continue
+                current_state = 3
+                sub_idx = 0
+            else:
+                if sub_idx < len(collected["types"]):
+                    collected["types"][sub_idx] = res
+                else:
+                    collected["types"].append(res)
+                sub_idx += 1
+                if sub_idx >= 5:
+                    current_state = 3
+                    sub_idx = 0
 
-    # 5. 退避
-    res = await ask("退避（書き方例：東京、品川、久里浜）", "退避可能駅：（無ければなし）", is_required=False)
-    if res is None: return
-    if res != "なし": collected["refuges"] = [r.strip() for r in res.split("、")]
+        elif current_state == 3:
+            type_count = len(collected["types"])
+            if sub_idx < 0:
+                current_state = 2
+                sub_idx = type_count - 1
+                continue
+                
+            if sub_idx >= type_count:
+                current_state = 4
+                sub_idx = 0
+                continue
+                
+            t_name = collected["types"][sub_idx]
+            res = await ask("各種別停車駅", f"【**{t_name}**】の停車駅を入力してください。\n※各駅停車の場合は『各駅停車』と書けば全駅停車になります。\n例：東京、千葉、上総一ノ宮", is_required=True)
+            
+            if res == "SIGNAL_CANCEL": break
+            elif res == "SIGNAL_TIMEOUT": return
+            elif res == "SIGNAL_BACK":
+                sub_idx -= 1
+                if sub_idx >= 0 and len(collected["stops"]) > sub_idx:
+                    collected["stops"].pop()
+                continue
+                
+            if sub_idx < len(collected["stops"]):
+                collected["stops"][sub_idx] = res
+            else:
+                collected["stops"].append(res)
+            sub_idx += 1
 
-    # 6. その他設定
-    res = await ask("その他設定", "往復数：（数字のみ）", is_required=True)
-    if res is None: return
-    collected["round_trips"] = int(res)
+        elif current_state == 4:
+            res = await ask("退避駅設定", "退避可能駅を教えてください（書き方例：東京、品川、久里浜）", is_required=False)
+            
+            if res == "SIGNAL_CANCEL": break
+            elif res == "SIGNAL_TIMEOUT": return
+            elif res == "SIGNAL_BACK":
+                current_state = 3
+                sub_idx = len(collected["types"]) - 1
+                continue
+                
+            if res != "なし":
+                collected["refuges"] = [r.strip() for r in res.split("、")]
+            else:
+                collected["refuges"] = []
+            current_state = 5
+            sub_idx = 0
 
-    res = await ask("その他設定", "開始時間：（例：10:00）", is_required=True)
-    if res is None: return
-    collected["start_time"] = res
+        elif current_state == 5:
+            res = await ask("その他設定", "往復数を入力してください（数字のみ）", is_required=True)
+            
+            if res == "SIGNAL_CANCEL": break
+            elif res == "SIGNAL_TIMEOUT": return
+            elif res == "SIGNAL_BACK":
+                current_state = 4
+                continue
+                
+            try:
+                collected["round_trips"] = int(res)
+                current_state = 6
+            except ValueError:
+                await user.send("❌ 数字だけで入力してください。")
 
-    for t_name in collected["types"]:
-        res = await ask("その他設定", f"種別「**{t_name}**」の始発駅（3つまで）：", is_required=True)
-        if res is None: return
-        collected["start_stations"].append(f"{t_name}＝{res}")
-# 7. ダイヤグラム選択（チャット入力式）
-    collected["want_diagram"] = True  # デフォルト値
-    while True:
-        res = await ask("その他設定", "ダイヤグラムを出力しますか？（はい / いいえ でお答えください）", is_required=True)
-        if res is None: return # タイムアウト時は処理を抜ける
+        elif current_state == 6:
+            res = await ask("その他設定", "開始時間を入力してください（例：10:00）", is_required=True)
+            
+            if res == "SIGNAL_CANCEL": break
+            elif res == "SIGNAL_TIMEOUT": return
+            elif res == "SIGNAL_BACK":
+                current_state = 5
+                continue
+                
+            collected["start_time"] = res
+            current_state = 7
+            sub_idx = 0
 
-        if res in ["はい", "はい ", "ハイ"]:
-            collected["want_diagram"] = True
-            break
-        elif res in ["いいえ", "いいえ ", "イイエ"]:
-            collected["want_diagram"] = False
-            break
-        else:
-            await user.send("❌ **入力エラー:** 「はい」または「いいえ」の文字だけで入力してください。")
+        elif current_state == 7:
+            type_count = len(collected["types"])
+            if sub_idx < 0:
+                current_state = 6
+                continue
+                
+            if sub_idx >= type_count:
+                current_state = 8
+                continue
+                
+            t_name = collected["types"][sub_idx]
+            res = await ask("その他設定", f"種別「**{t_name}**」の始発駅を入力してください：", is_required=True)
+            
+            if res == "SIGNAL_CANCEL": break
+            elif res == "SIGNAL_TIMEOUT": return
+            elif res == "SIGNAL_BACK":
+                sub_idx -= 1
+                if sub_idx >= 0 and len(collected["start_stations"]) > sub_idx:
+                    collected["start_stations"].pop()
+                continue
+                
+            entry = f"{t_name}＝{res}"
+            if sub_idx < len(collected["start_stations"]):
+                collected["start_stations"][sub_idx] = entry
+            else:
+                collected["start_stations"].append(entry)
+            sub_idx += 1
 
-    # --- 計算と送信処理 ---
+        elif current_state == 8:
+            res = await ask("その他設定", "ダイヤグラムを出力しますか？（はい / いいえ でお答えください）", is_required=True)
+            
+            if res == "SIGNAL_CANCEL": break
+            elif res == "SIGNAL_TIMEOUT": return
+            elif res == "SIGNAL_BACK":
+                current_state = 7
+                sub_idx = len(collected["types"]) - 1
+                continue
+                
+            if res in ["はい", "はい ", "ハイ"]:
+                collected["want_diagram"] = True
+                current_state = 9
+            elif res in ["いいえ", "いいえ ", "イイエ"]:
+                collected["want_diagram"] = False
+                current_state = 9
+            else:
+                await user.send("❌ **入力エラー:** 「はい」または「いいえ」の文字だけで入力してください。")
+
+    if current_state != 9:
+        cancel_embed = discord.Embed(title="🔒 キャンセル完了", description="ダイヤ作成ウィザードを中断しました。またいつでも `/create` を実行してください！", color=discord.Color.red())
+        await user.send(embed=cancel_embed)
+        return
+
     await user.send("🔄 ダイヤを作成しています…")
     await asyncio.sleep(1)
     
     timetable_text, img_bin = calculate_and_generate(collected)
     
-    # 1. ユーザーのDMへ送信
     files_dm = [discord.File(fp=io.BytesIO(img_bin.getvalue()), filename="diagram.png")] if img_bin else []
     await user.send(content=timetable_text, files=files_dm)
     
-    # 2. 指定のログチャンネルへ転送
     log_channel = bot.get_channel(CHANNEL_LOG)
     if log_channel:
         log_text = f"📢 **【{server_name}】サーバーでダイヤが作成されました**\n\n{timetable_text}"
         files_log = [discord.File(fp=io.BytesIO(img_bin.getvalue()), filename="diagram.png")] if img_bin else []
         await log_channel.send(content=log_text, files=files_log)
 
-    # 3. DMに評価アンケートを送信
     view = ReviewButtons(user.name)
     await user.send("⭐ **評価をお願いします**\nこのボットの使い心地はいかがでしたか？ボタンを選んでください。", view=view)
 
 # 🌐 起動処理
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 if TOKEN:
-    keep_alive() # Webサーバーを別スレッドで立ち上げる
+    keep_alive()
     bot.run(TOKEN)
 else:
     print("❌ エラー: 環境変数 'DISCORD_BOT_TOKEN' がありません。")
