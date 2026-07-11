@@ -729,3 +729,50 @@ if TOKEN:
     bot.run(TOKEN)
 else:
     print("❌ エラー: 環境変数 'DISCORD_BOT_TOKEN' がありません。")
+
+    # ==========================================
+# 🔄 10分自動更新ループ（修正版・上書き用）
+# ==========================================
+@tasks.loop(minutes=10.0)
+async def refresh_server_log_loop():
+    """導入サーバー一覧を10分ごとに安全にバックグラウンド同期します"""
+    global server_log_cache
+    await bot.wait_until_ready()
+    
+    try:
+        log_msg = f"🏰 **導入サーバー一覧 (最終自動更新: {datetime.datetime.now().strftime('%H:%M:%S')})**\n\n"
+        for guild in bot.guilds:
+            member_count = guild.member_count
+            owner = guild.owner.name if guild.owner else "不明"
+            log_msg += f"■ **{guild.name}** (ID: `{guild.id}`)\n┗ 👤 オーナー: {owner} | 👥 人数: {member_count}人\n\n"
+        
+        server_log_cache = log_msg
+        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Server logs successfully cached.")
+    except Exception as e:
+        print(f"⚠️ ログ更新エラー: {e}")
+
+# ==========================================
+# ⚙️ サーバーログコマンド（修正版・上書き用）
+# ==========================================
+@bot.tree.command(name="serverlog", description="【クリエイター限定】自動更新される全導入サーバーの一覧を表示します")
+async def serverlog(interaction: discord.Interaction):
+    if interaction.user.id != ALLOWED_USER_ID:
+        await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
+        return
+    
+    await interaction.response.defer(ephemeral=True)
+    global server_log_cache
+    
+    if not server_log_cache:
+        await interaction.followup.send("⏳ 現在ログを生成中です。数分後に再度お試しください。", ephemeral=True)
+        return
+        
+    msg = server_log_cache
+    while len(msg) > 1800:
+        split_idx = msg.rfind("\n\n", 0, 1800)
+        if split_idx == -1: split_idx = 1800
+        await interaction.followup.send(msg[:split_idx], ephemeral=True)
+        msg = msg[split_idx:]
+        
+    if msg:
+        await interaction.followup.send(msg, ephemeral=True)
