@@ -327,11 +327,11 @@ async def serverlog(interaction: discord.Interaction):
         await interaction.followup.send(msg, ephemeral=True)
 
 # ==========================================
-# 📊 稼働状況ステータスコマンド (👑作成者/オーナー専用版)
+# 📊 稼働状況ステータスコマンド (👑実行はあなた専用 / 表示は全員に見える)
 # ==========================================
 @bot.tree.command(name="botinfo", description="【作成者限定】ダイヤ作成所 | Free Create の現在の稼働状況をチェックします")
 async def botinfo(interaction: discord.Interaction):
-    # 👑 作成者IDのみ実行可能にするガード処理
+    # 👑 実行できるのはあなた（作成者）だけに制限するガード
     if interaction.user.id != ALLOWED_USER_ID:
         await interaction.response.send_message("❌ このコマンドはBotの作成者（開発者）専用のため、実行できません。", ephemeral=True)
         return
@@ -391,7 +391,8 @@ async def botinfo(interaction: discord.Interaction):
     
     embed.set_footer(text=f"{bot.user.name}", icon_url=bot.user.display_avatar.url)
 
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    # 💡 ephemeral=True を外すことで、出力されたパネルを「みんなが見える」ようにしました！
+    await interaction.response.send_message(embed=embed)
 
 # ==========================================
 # 🧠 ダイヤ計算＆画像生成エンジン
