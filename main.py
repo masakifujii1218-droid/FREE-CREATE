@@ -9,7 +9,7 @@ if user_site not in sys.path:
 
 import discord
 from discord import app_commands
-from discord.ext import commands, tasks  # 💡 tasksを追加
+from discord.ext import commands, tasks
 import asyncio
 import datetime
 from PIL import Image, ImageDraw
@@ -52,7 +52,7 @@ class DiaBot(commands.Bot):
 bot = DiaBot()
 
 ALLOWED_USER_ID = 1301944996261400656
-ADMIN_ROLE_ID = 1510021467167789104 # 前回の管理者用ロールIDも念のため定義
+ADMIN_ROLE_ID = 1510021467167789104 
 banned_guilds = set() # 利用凍結サーバーID
 banned_users = set()  # 🚫 ブラックリストユーザーID
 allowed_roles_map = {}
@@ -61,33 +61,44 @@ allowed_roles_map = {}
 CHANNEL_REVIEW = 1510639675239432313
 CHANNEL_LOG = 1524877240628805763
 
-# キャッシュ用サーバーログデータ（毎分更新用）
+# キャッシュ用サーバーログデータと起動時間記録
 server_log_cache = ""
+start_time_dt = None       # Botが起動した時刻
+last_refresh_dt = None     # サーバーログが最後に更新された時刻
 
 # ==========================================
-# 🔄 毎分自動更新ループ（バックグラウンドタスク）
+# 🔄 1時間自動更新ループ（バックグラウンドタスク）
 # ==========================================
-@tasks.loop(minutes=1.0)
+@tasks.loop(hours=1.0)
 async def refresh_server_log_loop():
-    """導入サーバー一覧と招待リンクのデータを毎分バックグラウンドで最新に更新します"""
-    global server_log_cache
+    """導入サーバー一覧と招待リンクのデータを1時間ごとにバックグラウンドで安全に更新します"""
+    global server_log_cache, last_refresh_dt
     await bot.wait_until_ready()
     
-    log_msg = f"🏰 **導入サーバー一覧＆招待リンクログ (最終自動更新: {datetime.datetime.now().strftime('%H:%M:%S')})**\n\n"
-    for guild in bot.guilds:
-        invite_link = "（招待作成の権限不足）"
-        for channel in guild.text_channels:
-            if channel.permissions_for(guild.me).create_instant_invite:
-                try:
-                    invite = await channel.create_invite(max_age=3600, max_uses=5)
-                    invite_link = invite.url
-                    break
-                except Exception:
-                    continue
-        log_msg += f"■ **{guild.name}** (ID: `{guild.id}`)\n┗ 🔗 招待リンク: {invite_link}\n\n"
-    
-    server_log_cache = log_msg
-    print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Server logs automatically synchronized.")
+    try:
+        log_msg = f"🏰 **導入サーバー一覧＆招待リンクログ (最終自動更新: {datetime.datetime.now().strftime('%m/%d %H:%M:%S')})**\n\n"
+        
+        for guild in bot.guilds:
+            member_count = guild.member_count
+            invite_link = "（招待作成の権限不足）"
+            
+            # 1時間おきなので、API制限にかからないよう安全に招待リンクを1つ作成
+            for channel in guild.text_channels:
+                if channel.permissions_for(guild.me).create_instant_invite:
+                    try:
+                        invite = await channel.create_invite(max_age=3600, max_uses=5)
+                        invite_link = invite.url
+                        break
+                    except Exception:
+                        continue
+            
+            log_msg += f"■ **{guild.name}** (ID: `{guild.id}`)\n┗ 🔗 招待リンク: {invite_link} | 👥 人数: {member_count}人\n\n"
+        
+        server_log_cache = log_msg
+        last_refresh_dt = datetime.datetime.now() # 最終更新時間を記録
+        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Server logs and invites successfully updated (Hourly).")
+    except Exception as e:
+        print(f"⚠️ ログ更新エラー: {e}")
 
 # ==========================================
 # 📥 サーバー追加（参加）時の自動DM送信イベント
@@ -182,7 +193,6 @@ async def create_roles(interaction: discord.Interaction, role_id: str):
         await interaction.response.send_message("❌ このサーバーでのBotの利用は凍結されています。", ephemeral=True)
         return
         
-    # 【修正】サーバーの管理者権限、またはBot最高開発者ならロール制限を設定可能
     is_admin = interaction.permissions.administrator if interaction.permissions else False
     is_owner = (interaction.user.id == ALLOWED_USER_ID)
     
@@ -293,20 +303,19 @@ async def subshutdown(interaction: discord.Interaction):
         banned_guilds.add(interaction.guild.id)
         await interaction.response.send_message(f"🔒 このサーバー（`{interaction.guild.name}`）でのBotの利用を凍結しました。")
 
-@bot.tree.command(name="serverlog", description="【クリエイター限定】毎分更新される全導入サーバーと招待リンクの一覧を表示します")
+@bot.tree.command(name="serverlog", description="【クリエイター限定】1時間ごとに自動更新される全導入サーバーと招待リンクの一覧を表示します")
 async def serverlog(interaction: discord.Interaction):
     if interaction.user.id != ALLOWED_USER_ID:
         await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
         return
-    await interaction.response.defer(ephemeral=True)
     
-    # 💡 毎分自動更新されているキャッシュから即座にログを出力
+    await interaction.response.defer(ephemeral=True)
     global server_log_cache
+    
     if not server_log_cache:
-        await interaction.followup.send("⏳ 現在ログを生成中です。少し待ってから再度実行してください。", ephemeral=True)
+        await interaction.followup.send("⏳ 現在ログを生成中です。起動から最大1時間かかるか、数分お待ちください。", ephemeral=True)
         return
         
-    # 文字数制限対策（分割送信）
     msg = server_log_cache
     while len(msg) > 1800:
         split_idx = msg.rfind("\n\n", 0, 1800)
@@ -316,6 +325,73 @@ async def serverlog(interaction: discord.Interaction):
         
     if msg:
         await interaction.followup.send(msg, ephemeral=True)
+
+# ==========================================
+# 📊 稼働状況ステータスコマンド (👑作成者/オーナー専用版)
+# ==========================================
+@bot.tree.command(name="botinfo", description="【作成者限定】ダイヤ作成所 | Free Create の現在の稼働状況をチェックします")
+async def botinfo(interaction: discord.Interaction):
+    # 👑 作成者IDのみ実行可能にするガード処理
+    if interaction.user.id != ALLOWED_USER_ID:
+        await interaction.response.send_message("❌ このコマンドはBotの作成者（開発者）専用のため、実行できません。", ephemeral=True)
+        return
+
+    # 1. 基本ステータス算出
+    ping = round(bot.latency * 1000)
+    guilds_count = f"{len(bot.guilds):,}"
+    
+    # 2. 全ユーザーの総数を集計
+    total_users = sum(guild.member_count for guild in bot.guilds)
+    users_count = f"{total_users:,}"
+    
+    # 3. Discord動的タイムスタンプの作成（何分前・何秒前を自動計算する特殊タグ）
+    start_ts_r = f"<t:{int(start_time_dt.timestamp())}:R>" if start_time_dt else "⏳ 計測中"
+    start_ts_f = f"<t:{int(start_time_dt.timestamp())}:F>" if start_time_dt else "⏳ 計測中"
+    
+    refresh_ts_r = f"<t:{int(last_refresh_dt.timestamp())}:R>" if last_refresh_dt else "⏳ まもなく初回更新"
+
+    # 4. 埋め込み (Embed) パネルの構築
+    embed = discord.Embed(
+        title="📊 ダイヤ作成所 | Free Create 稼働状況",
+        description="現在のステータス: 🟢 **正常稼働中**",
+        color=discord.Color.blue(),
+        timestamp=datetime.datetime.now()
+    )
+    
+    embed.add_field(
+        name="🆔 BOT ID",
+        value=f"`{bot.user.id}`",
+        inline=False
+    )
+    embed.add_field(
+        name="📶 Ping",
+        value=f"**{ping} ms**",
+        inline=False
+    )
+    embed.add_field(
+        name="🏰 導入サーバー",
+        value=f"**{guilds_count}** サーバー",
+        inline=False
+    )
+    embed.add_field(
+        name="👥 ユーザー総数",
+        value=f"**{users_count}** 人",
+        inline=False
+    )
+    embed.add_field(
+        name="⏱️ 起動時間",
+        value=f"**{start_ts_r}**\n({start_ts_f})",
+        inline=False
+    )
+    embed.add_field(
+        name="🔄 最終更新（サーバーログキャッシュ）",
+        value=f"**{refresh_ts_r}**",
+        inline=False
+    )
+    
+    embed.set_footer(text=f"{bot.user.name}", icon_url=bot.user.display_avatar.url)
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
 # ==========================================
 # 🧠 ダイヤ計算＆画像生成エンジン
@@ -424,7 +500,7 @@ def calculate_and_generate(data):
     return output_text, img_byte_arr
 
 # ==========================================
-# 📱 DM 一問一答対話システム（FSM改良版）
+# 📱 DM 一問一答対話システム
 # ==========================================
 @bot.tree.command(name="create", description="新しく鉄道のダイヤを作成します")
 async def create_dia(interaction: discord.Interaction):
@@ -435,16 +511,13 @@ async def create_dia(interaction: discord.Interaction):
         await interaction.response.send_message("❌ このサーバーでのBotの利用は凍結されています。", ephemeral=True)
         return
 
-    # 【修正】権限チェックロジックの強化
     required_role_id = allowed_roles_map.get(interaction.guild_id)
     user_permissions = interaction.user.guild_permissions if interaction.guild else None
     
-    # サーバーの「管理者」権限を持っているか、Botの最高開発者、または特定の管理者ロール持ちなら無条件パス
     is_admin = user_permissions.administrator if user_permissions else False
     is_owner = (interaction.user.id == ALLOWED_USER_ID)
     has_admin_role = any(role.id == ADMIN_ROLE_ID for role in interaction.user.roles) if interaction.guild else False
 
-    # ロール制限が設定されている場合のみチェックを実行（管理者・開発者らはバイパス）
     if required_role_id and not is_admin and not is_owner and not has_admin_role:
         if required_role_id not in [role.id for role in interaction.user.roles]:
             await interaction.response.send_message("❌ 使用する権限（指定されたロール）を持っていません。", ephemeral=True)
@@ -718,7 +791,9 @@ async def create_dia(interaction: discord.Interaction):
 # ==========================================
 @bot.event
 async def on_ready():
-    # 💡 バックグラウンドの毎分ログ更新タスクを開始
+    global start_time_dt
+    start_time_dt = datetime.datetime.now() # 起動時刻をシステムに記録
+    
     if not refresh_server_log_loop.is_running():
         refresh_server_log_loop.start()
     print(f"{bot.user} で正常にログインしました")
@@ -729,50 +804,3 @@ if TOKEN:
     bot.run(TOKEN)
 else:
     print("❌ エラー: 環境変数 'DISCORD_BOT_TOKEN' がありません。")
-
-    # ==========================================
-# 🔄 10分自動更新ループ（修正版・上書き用）
-# ==========================================
-@tasks.loop(minutes=10.0)
-async def refresh_server_log_loop():
-    """導入サーバー一覧を10分ごとに安全にバックグラウンド同期します"""
-    global server_log_cache
-    await bot.wait_until_ready()
-    
-    try:
-        log_msg = f"🏰 **導入サーバー一覧 (最終自動更新: {datetime.datetime.now().strftime('%H:%M:%S')})**\n\n"
-        for guild in bot.guilds:
-            member_count = guild.member_count
-            owner = guild.owner.name if guild.owner else "不明"
-            log_msg += f"■ **{guild.name}** (ID: `{guild.id}`)\n┗ 👤 オーナー: {owner} | 👥 人数: {member_count}人\n\n"
-        
-        server_log_cache = log_msg
-        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Server logs successfully cached.")
-    except Exception as e:
-        print(f"⚠️ ログ更新エラー: {e}")
-
-# ==========================================
-# ⚙️ サーバーログコマンド（修正版・上書き用）
-# ==========================================
-@bot.tree.command(name="serverlog", description="【クリエイター限定】自動更新される全導入サーバーの一覧を表示します")
-async def serverlog(interaction: discord.Interaction):
-    if interaction.user.id != ALLOWED_USER_ID:
-        await interaction.response.send_message("❌ このコマンドを実行する権限がありません。", ephemeral=True)
-        return
-    
-    await interaction.response.defer(ephemeral=True)
-    global server_log_cache
-    
-    if not server_log_cache:
-        await interaction.followup.send("⏳ 現在ログを生成中です。数分後に再度お試しください。", ephemeral=True)
-        return
-        
-    msg = server_log_cache
-    while len(msg) > 1800:
-        split_idx = msg.rfind("\n\n", 0, 1800)
-        if split_idx == -1: split_idx = 1800
-        await interaction.followup.send(msg[:split_idx], ephemeral=True)
-        msg = msg[split_idx:]
-        
-    if msg:
-        await interaction.followup.send(msg, ephemeral=True)
