@@ -805,3 +805,21 @@ if TOKEN:
     bot.run(TOKEN)
 else:
     print("❌ エラー: 環境変数 'DISCORD_BOT_TOKEN' がありません。")
+    # 💡 スマホ用に、一番下にエラー原因を表示するシステム
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: Exception):
+    # すでにBotが「考えてる最中（defer）」ならそれを使う、そうじゃなければ新規で返信する
+    if interaction.response.is_done():
+        send_func = interaction.followup.send
+    else:
+        send_func = interaction.response.send_message
+
+    # スマホで見やすいメッセージを作成（一番下にエラー内容を配置）
+    error_msg = (
+        "⚠️ **Botがクラッシュしました**\n"
+        "データ量が多すぎるか、設定された数字に矛盾がある可能性があります。\n\n"
+        f"🧐 **原因（エラー内容）： `{error}`**"
+    )
+    
+    # チャンネルに送信
+    await send_func(error_msg, ephemeral=False)
