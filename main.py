@@ -331,26 +331,21 @@ async def serverlog(interaction: discord.Interaction):
 # ==========================================
 @bot.tree.command(name="botinfo", description="【作成者限定】ダイヤ作成所 | Free Create の現在の稼働状況をチェックします")
 async def botinfo(interaction: discord.Interaction):
-    # 👑 実行できるのはあなた（作成者）だけに制限するガード
     if interaction.user.id != ALLOWED_USER_ID:
         await interaction.response.send_message("❌ このコマンドはBotの作成者（開発者）専用のため、実行できません。", ephemeral=True)
         return
 
-    # 1. 基本ステータス算出
     ping = round(bot.latency * 1000)
     guilds_count = f"{len(bot.guilds):,}"
     
-    # 2. 全ユーザーの総数を集計
     total_users = sum(guild.member_count for guild in bot.guilds)
     users_count = f"{total_users:,}"
     
-    # 3. Discord動的タイムスタンプの作成（何分前・何秒前を自動計算する特殊タグ）
     start_ts_r = f"<t:{int(start_time_dt.timestamp())}:R>" if start_time_dt else "⏳ 計測中"
     start_ts_f = f"<t:{int(start_time_dt.timestamp())}:F>" if start_time_dt else "⏳ 計測中"
     
     refresh_ts_r = f"<t:{int(last_refresh_dt.timestamp())}:R>" if last_refresh_dt else "⏳ まもなく初回更新"
 
-    # 4. 埋め込み (Embed) パネルの構築
     embed = discord.Embed(
         title="📊 ダイヤ作成所 | Free Create 稼働状況",
         description="現在のステータス: 🟢 **正常稼働中**",
@@ -358,44 +353,19 @@ async def botinfo(interaction: discord.Interaction):
         timestamp=datetime.datetime.now()
     )
     
-    embed.add_field(
-        name="🆔 BOT ID",
-        value=f"`{bot.user.id}`",
-        inline=False
-    )
-    embed.add_field(
-        name="📶 Ping",
-        value=f"**{ping} ms**",
-        inline=False
-    )
-    embed.add_field(
-        name="🏰 導入サーバー",
-        value=f"**{guilds_count}** サーバー",
-        inline=False
-    )
-    embed.add_field(
-        name="👥 ユーザー総数",
-        value=f"**{users_count}** 人",
-        inline=False
-    )
-    embed.add_field(
-        name="⏱️ 起動時間",
-        value=f"**{start_ts_r}**\n({start_ts_f})",
-        inline=False
-    )
-    embed.add_field(
-        name="🔄 最終更新（サーバーログキャッシュ）",
-        value=f"**{refresh_ts_r}**",
-        inline=False
-    )
+    embed.add_field(name="🆔 BOT ID", value=f"`{bot.user.id}`", inline=False)
+    embed.add_field(name="📶 Ping", value=f"**{ping} ms**", inline=False)
+    embed.add_field(name="🏰 導入サーバー", value=f"**{guilds_count}** サーバー", inline=False)
+    embed.add_field(name="👥 ユーザー総数", value=f"**{users_count}** 人", inline=False)
+    embed.add_field(name="⏱️ 起動時間", value=f"**{start_ts_r}**\n({start_ts_f})", inline=False)
+    embed.add_field(name="🔄 最終更新（サーバーログキャッシュ）", value=f"**{refresh_ts_r}**", inline=False)
     
     embed.set_footer(text=f"{bot.user.name}", icon_url=bot.user.display_avatar.url)
 
-    # 💡 ephemeral=True を外すことで、出力されたパネルを「みんなが見える」ようにしました！
     await interaction.response.send_message(embed=embed)
 
 # ==========================================
-# 🧠 ダイヤ計算＆画像生成エンジン
+# 🧠 ダイヤ計算＆画像生成エンジン（停車時間30秒/退避2分/停車駅一覧付き）
 # ==========================================
 def calculate_and_generate(data):
     stations, durations, types = data["stations"], data["durations"], data["types"]
@@ -440,14 +410,19 @@ def calculate_and_generate(data):
                     is_stop = (stop_map.get(t_type) == "all") or (st in stop_map.get(t_type, [])) or (idx == len(stations)-1)
                     note = ""
                     
-                    if stop_map.get(t_type) == "all" and st in refuges and idx != len(stations)-1:
-                        current_t += datetime.timedelta(seconds=120)
-                        note = "優等列車退避"
-                        
+                    # 💡 各駅停車（普通）が退避駅に止まる場合は退避時間（120秒）、それ以外の通常停車駅は30秒
+                    is_refuge_station = (st in refuges)
                     if is_stop:
                         dep_time = current_t
                         note = "終着" if idx == len(stations)-1 else note
-                        if idx != len(stations)-1: current_t += datetime.timedelta(seconds=30)
+                        
+                        if idx != len(stations)-1:
+                            if stop_map.get(t_type) == "all" and is_refuge_station:
+                                current_t += datetime.timedelta(seconds=120)  # 退避のための停車（2分）
+                                note = "優等列車退避"
+                            else:
+                                current_t += datetime.timedelta(seconds=30)   # 通常停車（30秒）
+                        
                         timetable[st] = {"arr": arr_time.strftime("%H:%M:%S"), "dep": dep_time.strftime("%H:%M:%S"), "note": note}
                     else:
                         timetable[st] = {"arr": arr_time.strftime("%H:%M:%S"), "dep": arr_time.strftime("%H:%M:%S"), "note": "通過"}
@@ -455,7 +430,22 @@ def calculate_and_generate(data):
             trains_schedule.append({"id": f"{global_id}M", "set_id": f"第{set_id}編成", "type": t_type, "stops": timetable})
             global_id += 1
 
-    output_text = f"## 🚂 生成されたカスタム運行ダイヤ\n\n"
+    # 🚉 停車駅一覧のテキスト組み立て
+    stop_info_text = "🚉 **系統別停車駅一覧:**\n"
+    for t_type in types:
+        route_stops = []
+        my_start_station = start_station_map.get(t_type, stations[0])
+        start_idx = stations.index(my_start_station) if my_start_station in stations else 0
+        
+        for idx in range(start_idx, len(stations)):
+            st = stations[idx]
+            is_stop = (stop_map.get(t_type) == "all") or (st in stop_map.get(t_type, [])) or (idx == len(stations)-1)
+            if is_stop:
+                route_stops.append(st)
+        
+        stop_info_text += f"・ **{t_type}**: " + " ➔ ".join(route_stops) + "\n"
+
+    output_text = f"## 🚂 生成されたカスタム運行ダイヤ\n\n{stop_info_text}\n"
     for ts in trains_schedule:
         output_text += f"**【{ts['type']} ({ts['id']}) ➔ {ts['set_id']}担当】**\n"
         output_text += "```\n"
@@ -762,64 +752,49 @@ async def create_dia(interaction: discord.Interaction):
             elif res in ["いいえ", "いいえ ", "イイエ"]:
                 collected["want_diagram"] = False
                 current_state = 10
-            else:
-                await user.send("❌ **入力エラー:** 「はい」または「いいえ」の文字だけで入力してください。")
 
-    if current_state != 10:
-        cancel_embed = discord.Embed(title="🔒 キャンセル完了", description="ダイヤ作成ウィザードを中断しました。またいつでも `/create` を実行してください！", color=discord.Color.red())
-        await user.send(embed=cancel_embed)
-        return
+    if current_state == 10:
+        await user.send("⏳ ダイヤと画像を算出中...")
+        text_res, img_bytes = calculate_and_generate(collected)
 
-    await user.send("🔄 ダイヤを作成しています…")
-    await asyncio.sleep(1)
-    
-    timetable_text, img_bin = calculate_and_generate(collected)
-    
-    files_dm = [discord.File(fp=io.BytesIO(img_bin.getvalue()), filename="diagram.png")] if img_bin else []
-    await user.send(content=timetable_text, files=files_dm)
-    
-    log_channel = bot.get_channel(CHANNEL_LOG)
-    if log_channel:
-        log_text = f"📢 **【{server_name}】サーバーでダイヤが作成されました**\n\n{timetable_text}"
-        files_log = [discord.File(fp=io.BytesIO(img_bin.getvalue()), filename="diagram.png")] if img_bin else []
-        await log_channel.send(content=log_text, files=files_log)
+        # 送信制限（2000文字）に配慮して分割して送信
+        while len(text_res) > 1900:
+            split_idx = text_res.rfind("\n", 0, 1900)
+            if split_idx == -1: split_idx = 1900
+            await user.send(text_res[:split_idx])
+            text_res = text_res[split_idx:]
+        if text_res:
+            await user.send(text_res)
 
-    view = ReviewButtons(user.name)
-    await user.send("⭐ **評価をお願いします**\nこのボットの使い心地はいかがでしたか？ボタンを選んでください。", view=view)
+        # ダイヤグラム画像があれば送信
+        if img_bytes:
+            await user.send(file=discord.File(img_bytes, filename="diagram.png"))
+
+        # 評価ボタンを送信
+        view = ReviewButtons(user.name)
+        await user.send("💖 今回のダイヤ作成はいかがでしたか？今後の改善のため評価にご協力ください！", view=view)
+    else:
+        await user.send("❌ ダイヤ作成ウィザードを中断しました。またいつでも `/create` コマンドから開始してください！")
 
 # ==========================================
-# ⚙️ 起動処理
+# 🚀 起動処理 ＆ バックグラウンドタスク開始
 # ==========================================
 @bot.event
 async def on_ready():
     global start_time_dt
-    start_time_dt = datetime.datetime.now() # 起動時刻をシステムに記録
+    if start_time_dt is None:
+        start_time_dt = datetime.datetime.now() # 起動時刻を一度だけ記録
+        
+    print(f"==========================================")
+    print(f"🤖 Bot is logged in as {bot.user}")
+    print(f"🏰 Owner ID: {ALLOWED_USER_ID}")
+    print(f"📶 Latency: {round(bot.latency * 1000)}ms")
+    print(f"==========================================")
     
+    # バックグラウンドタスク（導入サーバーログの自動更新）を開始
     if not refresh_server_log_loop.is_running():
         refresh_server_log_loop.start()
-    print(f"{bot.user} で正常にログインしました")
 
-TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
-if TOKEN:
-    keep_alive()
-    bot.run(TOKEN)
-else:
-    print("❌ エラー: 環境変数 'DISCORD_BOT_TOKEN' がありません。")
-    # 💡 スマホ用に、一番下にエラー原因を表示するシステム
-@bot.tree.error
-async def on_app_command_error(interaction: discord.Interaction, error: Exception):
-    # すでにBotが「考えてる最中（defer）」ならそれを使う、そうじゃなければ新規で返信する
-    if interaction.response.is_done():
-        send_func = interaction.followup.send
-    else:
-        send_func = interaction.response.send_message
-
-    # スマホで見やすいメッセージを作成（一番下にエラー内容を配置）
-    error_msg = (
-        "⚠️ **Botがクラッシュしました**\n"
-        "データ量が多すぎるか、設定された数字に矛盾がある可能性があります。\n\n"
-        f"🧐 **原因（エラー内容）： `{error}`**"
-    )
-    
-    # チャンネルに送信
-    await send_func(error_msg, ephemeral=False)
+# 起動（Render用のWebサーバー起動 ➔ Discord Bot接続）
+keep_alive()
+bot.run(os.environ.get("DISCORD_TOKEN"))
