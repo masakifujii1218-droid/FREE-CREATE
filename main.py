@@ -797,4 +797,4 @@ async def on_ready():
 
 # 起動（Render用のWebサーバー起動 ➔ Discord Bot接続）
 keep_alive()
-bot.run(os.environ.get("DISCORD_TOKEN"))
+bot.run("MTUyNDg2MzAxMDU0NjUyMDE1NA.Gxm0IO.ZzcrR9tDsb2lyQSgSoZ6kedF9Y8ODWPTbBX4BQ")  # あなたのトークン
